@@ -1,3 +1,3 @@
-# vpn-derp
+# Kinesin
 
-The Hellomouse VPN System (pending a better name) is probably not vaporware.
+The Kinesin mesh network router is probably not vaporware.
