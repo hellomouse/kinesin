@@ -3,5 +3,40 @@
 version = 3
 
 [[package]]
+name = "autocfg"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
+
+[[package]]
+name = "intrusive-collections"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb484b70a4ebad7f571bf84e9cd06b5bfb6a7e4db0c36e13dd1570c6b449c10d"
+dependencies = [
+ "memoffset",
+]
+
+[[package]]
 name = "kinesin"
 version = "0.1.0"
+
+[[package]]
+name = "kinesin-rdt"
+version = "0.1.0"
+
+[[package]]
+name = "kinesin-rdt-queue"
+version = "0.1.0"
+dependencies = [
+ "intrusive-collections",
+]
+
+[[package]]
+name = "memoffset"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "043175f069eda7b85febe4a74abbaeff828d9f8b448515d3151a14a3542811aa"
+dependencies = [
+ "autocfg",
+]

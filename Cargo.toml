@@ -1,6 +1,6 @@
-[package]
-name = "kinesin"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
+[workspace]
+members = [
+    "kinesin",
+    "kinesin-rdt",
+    "kinesin-rdt-queue",
+]
