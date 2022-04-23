@@ -42,88 +42,75 @@ impl RangeSet {
         }
     }
 
-    /// Insert a range into the set
-    pub fn insert_range(&mut self, new_range: Range<u64>) -> bool {
-        // remove all existing intersecting ranges, extend new range if needed
-        enum State {
-            Initial { new_range: Range<u64> },
-            RemoveExisting { new_range: Range<u64> },
-            CheckCapacity { to_insert: Range<u64> },
-            InsertNew { to_insert: Range<u64> },
+    fn _direct_insert(&mut self, new_range: Range<u64>) {
+        self.map.insert(new_range.start, new_range.end - new_range.start);
+    }
+
+    fn _max_checked_insert(&mut self, new_range: Range<u64>) -> bool {
+        if self.map.len() >= self.max_size {
+            // set is full
+            return false;
+        }
+        self._direct_insert(new_range);
+        true
+    }
+
+    fn _intersecting_insert(&mut self, mut new_range: Range<u64>) {
+        let range_iter = self.map.range(..=new_range.end);
+        let mut to_remove: Vec<u64> = Vec::new();
+        for (start, len) in range_iter.rev() {
+            if *start > new_range.start {
+                if start + len > new_range.end {
+                    // intersecting or immediately following range extends
+                    // past end of new range
+                    new_range.end = start + len;
+                } else {
+                    // intersecting range entirely contained with in new range
+                }
+                to_remove.push(*start);
+            } else {
+                if start + len < new_range.start {
+                    // new range is entirely after current range (no intersection)
+                    // no more ranges to search
+                    break;
+                } else if start + len < new_range.end {
+                    // intersecting range or immediately preceding range extends
+                    // past start of new range
+                    new_range.start = *start;
+                    to_remove.push(*start);
+                } else {
+                    // new range is entirely contained within existing range
+                    // Initial should've handled this
+                    unreachable!();
+                }
+            }
+        }
+        for s in to_remove {
+            self.map.remove(&s);
         }
 
-        let mut state = State::Initial { new_range };
-        loop {
-            // IMAGINE HAVING READABLE CODE
-            state = match state {
-                State::Initial { new_range } => {
-                    // search backwards from end
-                    let mut range_iter = self.map.range(..=new_range.end);
-                    if let Some((start, len)) = range_iter.next_back() {
-                        if *start <= new_range.start && start + len >= new_range.end {
-                            // range already covered in set
-                            return true;
-                        } else if start + len < new_range.start {
-                            // new range is after all existing ranges
-                            State::CheckCapacity { to_insert: new_range }
-                        } else {
-                            // new range intersects an existing range
-                            State::RemoveExisting { new_range }
-                        }
-                    } else {
-                        // new range is before all existing ranges (or no ranges exist),
-                        // insert new range after capacity check
-                        State::CheckCapacity { to_insert: new_range }
-                    }
-                },
-                State::RemoveExisting { mut new_range } => {
-                    let range_iter = self.map.range(..=new_range.end);
-                    let mut to_remove: Vec<u64> = Vec::new();
-                    for (start, len) in range_iter.rev() {
-                        if *start > new_range.start {
-                            if start + len > new_range.end {
-                                // intersecting or immediately following range extends
-                                // past end of new range
-                                new_range.end = start + len;
-                            } else {
-                                // intersecting range entirely contained with in new range
-                            }
-                            to_remove.push(*start);
-                        } else {
-                            if start + len < new_range.start {
-                                // new range is entirely after current range (no intersection)
-                                // no more ranges to search
-                                break;
-                            } else if start + len < new_range.end {
-                                // intersecting range or immediately preceding range extends
-                                // past start of new range
-                                new_range.start = *start;
-                                to_remove.push(*start);
-                            } else {
-                                // new range is entirely contained within existing range
-                                // Initial should've handled this
-                                unreachable!();
-                            }
-                        }
-                    }
-                    for s in to_remove {
-                        self.map.remove(&s);
-                    }
+        self._direct_insert(new_range);
+    }
 
-                    State::InsertNew { to_insert: new_range }
-                },
-                State::CheckCapacity { to_insert } => {
-                    if self.map.len() >= self.max_size {
-                        // set is full
-                        return false;
-                    }
-                    State::InsertNew { to_insert }
-                }
-                State::InsertNew { to_insert } => {
-                    self.map.insert(to_insert.start, to_insert.end - to_insert.start);
-                    return true;
-                }
-            };
+    /// Insert a range into the set
+    pub fn insert_range(&mut self, new_range: Range<u64>) -> bool {
+        let mut range_iter = self.map.range(..=new_range.end);
+        if let Some((start, len)) = range_iter.next_back() {
+            if *start <= new_range.start && start + len >= new_range.end {
+                // range already covered in set
+                true
+            } else if start + len < new_range.start {
+                // new range is after all existing ranges
+                self._max_checked_insert(new_range)
+            } else {
+                // new range intersects an existing range
+                self._intersecting_insert(new_range);
+                true
+            }
+        } else {
+            // new range is before all existing ranges (or no ranges exist),
+            // insert new range after capacity check
+            self._max_checked_insert(new_range)
         }
     }
 
