@@ -49,10 +49,11 @@ impl RangeSet {
     fn _max_checked_insert(&mut self, new_range: Range<u64>) -> bool {
         if self.map.len() >= self.max_size {
             // set is full
-            return false;
+            false
+        } else {
+            self._direct_insert(new_range);
+            true
         }
-        self._direct_insert(new_range);
-        true
     }
 
     fn _intersecting_insert(&mut self, mut new_range: Range<u64>) {
@@ -103,7 +104,7 @@ impl RangeSet {
                 // new range is after all existing ranges
                 self._max_checked_insert(new_range)
             } else {
-                // new range intersects an existing range
+                // new range intersects or is adjacent to an existing range
                 self._intersecting_insert(new_range);
                 true
             }
@@ -156,6 +157,18 @@ impl RangeSet {
 #[cfg(test)]
 mod test {
     use super::RangeSet;
+    
+    fn ensure_consistency(rs: &RangeSet) {
+        assert!(rs.map.len() > 0);
+        let mut iter = rs.map.iter();
+        let first_el = iter.next().unwrap();
+        let mut last_end = first_el.0 + first_el.1;
+
+        for (start, len) in iter {
+            assert!(*start > last_end);
+            last_end = start + len;
+        }
+    }
 
     #[test]
     fn insert_distinct_range() {
@@ -177,6 +190,8 @@ mod test {
         assert!(!rs.has_range(12..18));
 
         assert_eq!(rs.peek_first(), Some(0..10));
+
+        ensure_consistency(&rs);
     }
 
     #[test]
@@ -196,13 +211,15 @@ mod test {
         assert!(rs.insert_range(90..100));
         assert!(rs.insert_range(80..90));
         assert_eq!(rs.peek_last(), Some(80..100));
+        assert!(!rs.has_value(75));
+        assert!(rs.insert_range(70..80));
+        assert_eq!(rs.peek_last(), Some(50..100));
 
         assert!(rs.has_value(0));
         assert!(rs.has_value(8));
         assert!(rs.has_value(60));
 
         assert!(!rs.has_value(20));
-        assert!(!rs.has_value(75));
 
         assert!(rs.has_range(0..10));
         assert!(rs.has_range(0..15));
@@ -210,6 +227,8 @@ mod test {
         assert!(rs.has_range(10..15));
         assert!(rs.has_range(55..65));
         assert!(rs.has_range(85..95));
+
+        ensure_consistency(&rs);
     }
 
     #[test]
@@ -226,6 +245,8 @@ mod test {
 
         rs.remove_until_from_first(25);
         assert_eq!(rs.peek_first(), Some(25..30));
+
+        ensure_consistency(&rs);
     }
 
     #[test]
@@ -248,5 +269,7 @@ mod test {
         assert!(rs.insert_range(69..81));
         assert_eq!(rs.peek_last(), Some(60..90));
         assert_eq!(rs.map.len(), 4);
+
+        ensure_consistency(&rs);
     }
 }
