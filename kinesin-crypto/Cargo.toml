@@ -1,12 +1,9 @@
 [package]
-name = "kinesin-rdt"
+name = "kinesin-crypto"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-intrusive-collections = "0.9.3"
-log = "0.4.16"
 parking_lot = "0.12.1"
-flume = "0.10.13"
