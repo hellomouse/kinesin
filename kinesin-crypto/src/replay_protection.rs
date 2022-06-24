@@ -20,6 +20,7 @@ pub struct ReplayProtection {
 }
 
 /// Describes result of ReplayProtection::resolve_index
+#[derive(PartialEq)]
 pub enum ResolveIndexResult {
     /// Requested index is before current window
     TooOld,
@@ -80,10 +81,8 @@ impl ReplayProtection {
     /// Advance current window forward to include `new_index`.
     /// If the current window already includes `new_index`, do nothing.
     pub fn advance_window(inner: &mut ReplayProtectionInner, new_index: u64) {
-        if new_index < inner.start_offset {
-            return;
-        }
-        if new_index - inner.start_offset < inner.bitfield.len() as u64 * usize::BITS as u64 {
+        // ensure window needs advancing
+        if Self::resolve_index(inner, new_index) != ResolveIndexResult::TooNew {
             return;
         }
         let usize_len_u64 = usize::BITS as u64;
