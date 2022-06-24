@@ -63,7 +63,7 @@ impl ReplayProtection {
         let usize_len = usize::BITS as u64;
         if index < inner.start_offset {
             ResolveIndexResult::TooOld
-        } else if index >= inner.start_offset + bitfield_len * usize_len {
+        } else if index - inner.start_offset >= bitfield_len * usize_len {
             ResolveIndexResult::TooNew
         } else {
             let element_raw_index = ((index - inner.start_offset) / usize_len) as usize;
@@ -80,7 +80,10 @@ impl ReplayProtection {
     /// Advance current window forward to include `new_index`.
     /// If the current window already includes `new_index`, do nothing.
     pub fn advance_window(inner: &mut ReplayProtectionInner, new_index: u64) {
-        if new_index < inner.start_offset + inner.bitfield.len() as u64 * usize::BITS as u64 {
+        if new_index < inner.start_offset {
+            return;
+        }
+        if new_index - inner.start_offset < inner.bitfield.len() as u64 * usize::BITS as u64 {
             return;
         }
         let usize_len_u64 = usize::BITS as u64;
@@ -172,7 +175,7 @@ mod test {
 
     #[test]
     fn move_window() {
-        let rp = ReplayProtection::new(256);
+        let mut rp = ReplayProtection::new(256);
         assert!(!rp.set_index(0));
         assert!(!rp.set_index(5));
         assert!(!rp.set_index(250));
@@ -182,16 +185,28 @@ mod test {
         assert!(rp.set_index(1));
         assert!(rp.test_index(2));
         assert!(rp.set_index(250));
+
+        // test max values
+        assert!(!rp.set_index(u64::MAX));
+        assert!(rp.test_index(u64::MAX));
+
+        rp = ReplayProtection::new(256);
+        assert!(!rp.set_index(u64::MAX - 1));
+        assert!(!rp.test_index(u64::MAX));
+        assert!(!rp.set_index(u64::MAX));
+        assert!(rp.test_index(u64::MAX));
     }
 
     use std::sync::Arc;
     use std::thread;
 
+    const THREADS: u64 = 32;
+    const PER_THREAD: u64 = 65536;
+    const RP_SIZE: usize = 8192;
+
     #[test]
     fn spam_threads_no_collide() {
-        const THREADS: u64 = 32;
-        const PER_THREAD: u64 = 65536;
-        let rp = Arc::new(ReplayProtection::new(256));
+        let rp = Arc::new(ReplayProtection::new(RP_SIZE));
         let mut threads = Vec::new();
 
         for tno in 0..THREADS {
@@ -208,16 +223,15 @@ mod test {
             t.join().expect("thread crashed, oh no");
         }
 
-        for i in 0..(THREADS * PER_THREAD) {
+        let rp_base = rp.inner.read().start_offset;
+        for i in rp_base..(THREADS * PER_THREAD) {
             assert!(rp.test_index(i));
         }
     }
 
     #[test]
     fn spam_threads_but_collide() {
-        const THREADS: u64 = 32;
-        const PER_THREAD: u64 = 65536;
-        let rp = Arc::new(ReplayProtection::new(256));
+        let rp = Arc::new(ReplayProtection::new(RP_SIZE));
         let mut threads = Vec::new();
 
         for _ in 0..THREADS {
@@ -240,9 +254,19 @@ mod test {
             .collect();
 
         // ensure filled
-        for i in 0..PER_THREAD {
+        let rp_base = rp.inner.read().start_offset;
+        for i in rp_base..PER_THREAD {
             assert!(rp.test_index(i));
         }
+
+        println!(
+            "replay_protection success counts per thread: {}",
+            total_counts
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
 
         // if this works there have probably been no collisions
         assert_eq!(total_counts.iter().sum::<u64>(), PER_THREAD);
