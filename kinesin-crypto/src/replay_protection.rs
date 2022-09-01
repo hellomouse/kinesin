@@ -197,11 +197,29 @@ mod test {
     }
 
     use std::sync::Arc;
-    use std::thread;
+    use std::thread::{self, JoinHandle};
 
     const THREADS: u64 = 32;
     const PER_THREAD: u64 = 65536;
     const RP_SIZE: usize = 8192;
+
+    fn join_for_counts(threads: Vec<JoinHandle<u64>>) -> Vec<u64> {
+        let total_counts: Vec<u64> = threads
+            .into_iter()
+            .map(|t| t.join().expect("oh no, thread crashed"))
+            .collect();
+
+        println!(
+            "replay_protection success counts per thread: {}",
+            total_counts
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
+
+        total_counts
+    }
 
     #[test]
     fn spam_threads_no_collide() {
@@ -211,21 +229,29 @@ mod test {
         for tno in 0..THREADS {
             let rp_cloned = rp.clone();
             let t = thread::spawn(move || {
+                let mut succeeded: u64 = 0;
                 for i in 0..PER_THREAD {
-                    rp_cloned.set_index(i * THREADS + tno);
+                    if !rp_cloned.set_index(i * THREADS + tno) {
+                        succeeded += 1;
+                    }
                 }
+                succeeded
             });
             threads.push(t);
         }
 
-        for t in threads {
-            t.join().expect("thread crashed, oh no");
-        }
+        let total_counts = join_for_counts(threads);
 
+        let total = THREADS * PER_THREAD;
         let rp_base = rp.inner.read().start_offset;
         for i in rp_base..(THREADS * PER_THREAD) {
             assert!(rp.test_index(i));
         }
+        
+        // sanity
+        let sum = total_counts.iter().sum::<u64>();
+        println!("sum {}, total {}", sum, total);
+        assert!(sum <= total);
     }
 
     #[test]
@@ -247,25 +273,13 @@ mod test {
             threads.push(t);
         }
 
-        let total_counts: Vec<u64> = threads
-            .into_iter()
-            .map(|t| t.join().expect("oh no, thread crashed"))
-            .collect();
+        let total_counts = join_for_counts(threads);
 
         // ensure filled
         let rp_base = rp.inner.read().start_offset;
         for i in rp_base..PER_THREAD {
             assert!(rp.test_index(i));
         }
-
-        println!(
-            "replay_protection success counts per thread: {}",
-            total_counts
-                .iter()
-                .map(|c| c.to_string())
-                .collect::<Vec<String>>()
-                .join(", ")
-        );
 
         // if this works there have probably been no collisions
         assert_eq!(total_counts.iter().sum::<u64>(), PER_THREAD);
