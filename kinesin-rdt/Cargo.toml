@@ -6,7 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-intrusive-collections = "0.9.3"
 log = "0.4.16"
 parking_lot = "0.12.1"
-flume = "0.10.13"
+crossbeam-channel = "0.5.6"
+tracing = "0.1.37"
+
+[dev-dependencies]
+anyhow = "1.0.69"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }

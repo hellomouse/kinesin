@@ -2,5 +2,6 @@
 members = [
     "kinesin",
     "kinesin-rdt",
-    "kinesin-crypto"
+    "kinesin-crypto",
+    "kinesin-rdt-minimal"
 ]
