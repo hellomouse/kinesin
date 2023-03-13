@@ -1,6 +1,7 @@
-use flume::{Receiver, Sender};
+use crossbeam_channel::{Sender, Receiver};
 use parking_lot::Mutex;
 
+// TODO: rewrite this, and message broker
 pub trait MessageTarget<MessageType, Target: MessageHandler<MessageType>> {
     fn _messaging_defer(&self);
     fn _messaging_get_target(&self) -> &Mutex<Target>;
