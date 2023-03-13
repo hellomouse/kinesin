@@ -117,13 +117,13 @@ impl ReplayProtection {
         match ReplayProtection::resolve_index(&inner_read, index) {
             ResolveIndexResult::Found { element, mask } => {
                 let current = inner_read.bitfield[element].load(Ordering::Relaxed);
-                return current & mask > 0;
+                current & mask > 0
             }
             ResolveIndexResult::TooNew => {
-                return false;
+                false
             }
             ResolveIndexResult::TooOld => {
-                return true;
+                true
             }
         }
     }
