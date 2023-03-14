@@ -125,25 +125,35 @@ impl RangeSet {
         }
     }
 
-    /// Remove range from set
-    pub fn remove_range<R: RangeBounds<u64>>(&mut self, to_remove: R) -> usize {
-        let lower_bound = match to_remove.start_bound() {
+    /// Convert RangeBounds to ordinary range
+    pub fn materialize_bounds(range: impl RangeBounds<u64>) -> Range<u64> {
+        // TODO: this feels like a bad idea
+        let lower_bound = match range.start_bound() {
             Bound::Included(start) => *start,
             Bound::Excluded(start) => start.checked_add(1).expect("range out of bounds"),
             Bound::Unbounded => 0,
         };
-        let upper_bound = match to_remove.end_bound() {
+        let upper_bound = match range.end_bound() {
             Bound::Included(end) => end.checked_add(1).expect("range out of bounds"),
             Bound::Excluded(end) => *end,
             Bound::Unbounded => u64::MAX,
         };
+        lower_bound..upper_bound
+    }
+
+    /// Remove range from set
+    pub fn remove_range(&mut self, to_remove: impl RangeBounds<u64>) -> usize {
+        let Range {
+            start: lower_bound,
+            end: upper_bound,
+        } = Self::materialize_bounds(to_remove);
 
         if lower_bound == upper_bound {
             panic!("cannot remove zero-length range");
         }
 
         let mut affected = 0;
-        let range_iter = self.map.range((Bound::Unbounded, to_remove.end_bound()));
+        let range_iter = self.map.range(..upper_bound);
         let mut pending_ops: Vec<(u64, Option<u64>)> = Vec::new();
 
         for (&start, &len) in range_iter.rev() {
@@ -192,6 +202,50 @@ impl RangeSet {
         affected
     }
 
+    /// Iterate all ranges contained in set
+    pub fn iter(&self) -> impl Iterator<Item = Range<u64>> + '_ {
+        self.map.iter().map(|(key, value)| *key..(key + value))
+    }
+
+    /// Iterate all ranges in set intersecting provided range
+    pub fn iter_range(
+        &self,
+        range: impl RangeBounds<u64>,
+    ) -> impl Iterator<Item = Range<u64>> + '_ {
+        let Range {
+            start: requested_start,
+            end,
+        } = Self::materialize_bounds(range);
+        let start = if requested_start == 0 {
+            0
+        } else {
+            let mut back_search = self.map.range(..=requested_start);
+            if let Some((&prev_start, &len)) = back_search.next_back() {
+                if prev_start + len > requested_start {
+                    // previous range extends into requested
+                    prev_start
+                } else {
+                    requested_start
+                }
+            } else {
+                requested_start
+            }
+        };
+        self.map
+            .range(start..end)
+            .map(|(key, value)| *key..(key + value))
+    }
+
+    /// Find all ranges within provided range but which do not exist in the set
+    pub fn range_complement(&self, range: Range<u64>) -> impl Iterator<Item = Range<u64>> + '_ {
+        ComplementIterator {
+            range: range.clone(),
+            prev_end: range.start,
+            range_iter: self.iter_range(range),
+            done: false,
+        }
+    }
+
     /// Peek first value in set
     pub fn peek_first(&self) -> Option<Range<u64>> {
         self.map
@@ -208,14 +262,53 @@ impl RangeSet {
 
     /// Dump all ranges in set
     pub fn dump_all(&self) {
-        for (&start, &len) in self.map.iter() {
-            println!("{}..{}", start, start + len);
+        for range in self.iter() {
+            println!("{:?}", range);
+        }
+    }
+}
+
+struct ComplementIterator<T: Iterator<Item = Range<u64>>> {
+    range: Range<u64>,
+    prev_end: u64,
+    range_iter: T,
+    done: bool,
+}
+
+impl<T: Iterator<Item = Range<u64>>> Iterator for ComplementIterator<T> {
+    type Item = Range<u64>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        loop {
+            let iter_next = self.range_iter.next();
+            if let Some(intersecting) = iter_next {
+                let prev_end = self.prev_end;
+                self.prev_end = intersecting.end;
+
+                if intersecting.start <= prev_end {
+                    // skip this range
+                } else {
+                    return Some(prev_end..intersecting.start);
+                }
+            } else {
+                let output = if self.prev_end < self.range.end {
+                    Some(self.prev_end..self.range.end)
+                } else {
+                    None
+                };
+                self.done = true;
+                return output;
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod test {
+    use std::ops::Range;
+
     use super::RangeSet;
 
     fn ensure_consistency(rs: &RangeSet) {
@@ -378,5 +471,55 @@ mod test {
         assert!(rs.has_value(90));
 
         ensure_consistency(&rs);
+    }
+
+    #[test]
+    fn iter_range() {
+        let mut rs = RangeSet::unlimited();
+        rs.insert_range(1..3);
+        rs.insert_range(4..6);
+        assert_eq!(
+            rs.iter_range(2..5).collect::<Vec<Range<u64>>>(),
+            vec![1..3, 4..6]
+        );
+        rs.insert_range(10..15);
+        assert_eq!(
+            rs.iter_range(9..11).collect::<Vec<Range<u64>>>(),
+            vec![10..15]
+        );
+        rs.insert_range(16..25);
+        assert_eq!(
+            rs.iter_range(13..20).collect::<Vec<Range<u64>>>(),
+            vec![10..15, 16..25]
+        );
+        assert_eq!(
+            rs.iter_range(15..17).collect::<Vec<Range<u64>>>(),
+            vec![16..25]
+        );
+    }
+
+    #[test]
+    fn range_complement() {
+        let mut rs = RangeSet::unlimited();
+        rs.insert_range(1..3);
+        rs.insert_range(4..6);
+        rs.insert_range(10..15);
+        rs.insert_range(16..20);
+        assert_eq!(
+            rs.range_complement(2..17).collect::<Vec<Range<u64>>>(),
+            vec![3..4, 6..10, 15..16]
+        );
+        assert_eq!(
+            rs.range_complement(11..13).collect::<Vec<Range<u64>>>(),
+            vec![]
+        );
+        assert_eq!(
+            rs.range_complement(6..10).collect::<Vec<Range<u64>>>(),
+            vec![6..10]
+        );
+        assert_eq!(
+            rs.range_complement(6..13).collect::<Vec<Range<u64>>>(),
+            vec![6..10]
+        );
     }
 }

@@ -1,5 +1,4 @@
 use std::collections::{HashSet, VecDeque};
-use std::io::Write;
 use std::ops::Range;
 
 use tracing::trace;
@@ -164,16 +163,6 @@ impl StreamOutboundState {
             }
             _ => panic!("stream not using deadline retransmission"),
         }
-    }
-}
-
-impl Write for StreamOutboundState {
-    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
-        todo!()
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
     }
 }
 
