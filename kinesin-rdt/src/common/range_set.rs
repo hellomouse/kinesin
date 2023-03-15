@@ -50,22 +50,22 @@ impl RangeSet {
         }
     }
 
-    fn _direct_insert(&mut self, new_range: Range<u64>) {
+    fn direct_insert(&mut self, new_range: Range<u64>) {
         self.map
             .insert(new_range.start, new_range.end - new_range.start);
     }
 
-    fn _max_checked_insert(&mut self, new_range: Range<u64>) -> bool {
+    fn max_checked_insert(&mut self, new_range: Range<u64>) -> bool {
         if self.map.len() >= self.max_size {
             // set is full
             false
         } else {
-            self._direct_insert(new_range);
+            self.direct_insert(new_range);
             true
         }
     }
 
-    fn _intersecting_insert(&mut self, mut new_range: Range<u64>) {
+    fn intersecting_insert(&mut self, mut new_range: Range<u64>) {
         let range_iter = self.map.range(..=new_range.end);
         let mut to_remove: Vec<u64> = Vec::new();
         for (&start, &len) in range_iter.rev() {
@@ -98,7 +98,7 @@ impl RangeSet {
             self.map.remove(&s);
         }
 
-        self._direct_insert(new_range);
+        self.direct_insert(new_range);
     }
 
     /// Insert a range into the set
@@ -114,16 +114,16 @@ impl RangeSet {
                 true
             } else if end < new_range.start {
                 // new range is after all existing ranges
-                self._max_checked_insert(new_range)
+                self.max_checked_insert(new_range)
             } else {
                 // new range intersects or is adjacent to an existing range
-                self._intersecting_insert(new_range);
+                self.intersecting_insert(new_range);
                 true
             }
         } else {
             // new range is before all existing ranges (or no ranges exist),
             // insert new range after capacity check
-            self._max_checked_insert(new_range)
+            self.max_checked_insert(new_range)
         }
     }
 
@@ -144,14 +144,45 @@ impl RangeSet {
     }
 
     /// Remove range from set
-    pub fn remove_range(&mut self, to_remove: impl RangeBounds<u64>) -> usize {
+    pub fn remove_range(&mut self, to_remove: impl RangeBounds<u64> + Clone) -> usize {
         let Range {
             start: lower_bound,
             end: upper_bound,
-        } = Self::materialize_bounds(to_remove);
+        } = Self::materialize_bounds(to_remove.clone());
 
         if lower_bound == upper_bound {
             panic!("cannot remove zero-length range");
+        }
+
+        // fast path: Unbounded can use split_off
+        if to_remove.start_bound() == Bound::Unbounded {
+            if to_remove.end_bound() == Bound::Unbounded {
+                let affected = self.map.len();
+                self.map.clear();
+                return affected;
+            } else {
+                // split off everything after the upper bound, then drop old map
+                let mut after = self.map.split_off(&upper_bound);
+                if let Some((&start, &len)) = self.map.last_key_value() {
+                    if start + len > upper_bound {
+                        // range extends over split point, add it back into the new map
+                        let new_len = len - (upper_bound - start);
+                        after.insert(upper_bound, new_len);
+                    }
+                }
+                let affected = self.map.len();
+                self.map = after;
+                return affected;
+            }
+        } else if to_remove.end_bound() == Bound::Unbounded {
+            // split off everything after the lower bound
+            self.map.split_off(&lower_bound);
+            if let Some((&start, &len)) = self.map.last_key_value() {
+                if start + len > lower_bound {
+                    // highest range extends over split point, trim it back
+                    self.map.insert(start, lower_bound - start);
+                }
+            }
         }
 
         let mut affected = 0;
@@ -405,6 +436,12 @@ mod test {
 
         rs.remove_range(..25);
         assert_eq!(rs.peek_first(), Some(25..30));
+
+        rs.remove_range(85..);
+        assert_eq!(rs.peek_last(), Some(80..85));
+
+        rs.remove_range(50..);
+        assert_eq!(rs.peek_last(), Some(40..50));
 
         ensure_consistency(&rs);
     }
