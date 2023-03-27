@@ -1,5 +1,5 @@
 use std::marker::PhantomData;
-use std::mem::size_of;
+use std::mem::{size_of, MaybeUninit};
 use std::ops::{Bound, Range, RangeBounds};
 use std::{ptr, slice};
 
@@ -480,33 +480,40 @@ impl<T: Copy> RingBuf<T> {
         range_b: Option<Range<usize>>,
         elements: &[T],
     ) {
+        self.copy_range_from_ptr(range_a, range_b, elements.as_ptr(), elements.len());
+    }
+
+    /// copy elements from raw pointer into buffer ranges
+    unsafe fn copy_range_from_ptr(
+        &mut self,
+        range_a: Range<usize>,
+        range_b: Option<Range<usize>>,
+        source: *const T,
+        count: usize,
+    ) {
         if let Some(b) = range_b {
             // split copy
             debug_assert_eq!(
                 b.end - b.start + range_a.end - range_a.start,
-                elements.len(),
+                count,
                 "range incorrect"
             );
             unsafe {
                 // copy first range
                 let dest_a = self.ptr_at(range_a.start);
                 let length_a = range_a.end - range_a.start;
-                ptr::copy_nonoverlapping(elements.as_ptr(), dest_a, length_a);
+                ptr::copy_nonoverlapping(source, dest_a, length_a);
                 // copy second range
                 let dest_b = self.ptr_at(b.start);
-                let length_b = elements.len() - length_a;
-                ptr::copy_nonoverlapping(elements.as_ptr().add(length_a), dest_b, length_b);
+                let length_b = count - length_a;
+                ptr::copy_nonoverlapping(source.add(length_a), dest_b, length_b);
             }
         } else {
             // oneshot copy
-            debug_assert_eq!(
-                range_a.end - range_a.start,
-                elements.len(),
-                "range incorrect"
-            );
+            debug_assert_eq!(range_a.end - range_a.start, count, "range incorrect");
             unsafe {
                 let dest = self.ptr_at(range_a.start);
-                ptr::copy_nonoverlapping(elements.as_ptr(), dest, range_a.end - range_a.start);
+                ptr::copy_nonoverlapping(source, dest, range_a.end - range_a.start);
             }
         }
     }
@@ -518,37 +525,40 @@ impl<T: Copy> RingBuf<T> {
         range_b: Option<Range<usize>>,
         to_slice: &mut [T],
     ) {
+        self.copy_range_to_ptr(range_a, range_b, to_slice.as_mut_ptr(), to_slice.len());
+    }
+
+    /// copy elements from buffer ranges to raw pointer
+    unsafe fn copy_range_to_ptr(
+        &self,
+        range_a: Range<usize>,
+        range_b: Option<Range<usize>>,
+        dest: *mut T,
+        count: usize,
+    ) {
         if let Some(b) = range_b {
             // split copy
             debug_assert_eq!(
                 b.end - b.start + range_a.end - range_a.start,
-                to_slice.len(),
+                count,
                 "range incorrect"
             );
             unsafe {
                 // copy first range
                 let source_a = self.ptr_at(range_a.start) as *const T;
                 let length_a = range_a.end - range_a.start;
-                ptr::copy_nonoverlapping(source_a, to_slice.as_mut_ptr(), length_a);
+                ptr::copy_nonoverlapping(source_a, dest, length_a);
                 // copy second range
                 let source_b = self.ptr_at(b.start) as *const T;
-                let length_b = to_slice.len() - length_a;
-                ptr::copy_nonoverlapping(source_b, to_slice.as_mut_ptr().add(length_a), length_b);
+                let length_b = count - length_a;
+                ptr::copy_nonoverlapping(source_b, dest.add(length_a), length_b);
             }
         } else {
             // oneshot copy
-            debug_assert_eq!(
-                range_a.end - range_a.start,
-                to_slice.len(),
-                "range incorrect"
-            );
+            debug_assert_eq!(range_a.end - range_a.start, count, "range incorrect");
             unsafe {
                 let source = self.ptr_at(range_a.start) as *const T;
-                ptr::copy_nonoverlapping(
-                    source,
-                    to_slice.as_mut_ptr(),
-                    range_a.end - range_a.start,
-                );
+                ptr::copy_nonoverlapping(source, dest, range_a.end - range_a.start);
             }
         }
     }
@@ -571,6 +581,7 @@ impl<T: Copy> RingBuf<T> {
         self.len += elements.len();
     }
 
+    /// obtain reference to element at provided index
     pub fn get(&self, index: usize) -> Option<&T> {
         if index < self.len {
             unsafe { Some(&*self.ptr_at(self.offset_of(index))) }
@@ -579,6 +590,7 @@ impl<T: Copy> RingBuf<T> {
         }
     }
 
+    /// obtain mutable reference to element at provided index
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         if index < self.len {
             unsafe { Some(&mut *self.ptr_at(self.offset_of(index))) }
@@ -644,6 +656,22 @@ impl<'a, T: Copy> RingBufSlice<'a, T> {
         unsafe {
             let (a, b) = self.buf.map_range(self.start..self.end);
             self.buf.copy_range_to_slice(a, b, slice);
+        }
+    }
+
+    /// copy contents of range to a raw pointer
+    pub unsafe fn copy_to_ptr(&self, dest: *mut T, count: usize) {
+        assert_eq!(self.len(), count, "length mismatch");
+        let (a, b) = self.buf.map_range(self.start..self.end);
+        self.buf.copy_range_to_ptr(a, b, dest, count);
+    }
+
+    /// read elements as fixed length array
+    pub fn read_fixed<const N: usize>(&self) -> [T; N] {
+        unsafe {
+            let mut out: MaybeUninit<[T; N]> = MaybeUninit::uninit();
+            self.copy_to_ptr(out.as_mut_ptr() as *mut T, N);
+            out.assume_init()
         }
     }
 }
@@ -720,12 +748,37 @@ impl<'a, T: Copy> RingBufSliceMut<'a, T> {
         }
     }
 
+    /// copy contents of range to a raw pointer
+    pub unsafe fn copy_to_ptr(&self, dest: *mut T, count: usize) {
+        assert_eq!(self.len(), count, "length mismatch");
+        let (a, b) = (*self.buf).map_range(self.start..self.end);
+        (*self.buf).copy_range_to_ptr(a, b, dest, count);
+    }
+
+    /// read elements as fixed length array
+    pub fn read_fixed<const N: usize>(&self) -> [T; N] {
+        unsafe {
+            let mut out: MaybeUninit<[T; N]> = MaybeUninit::uninit();
+            self.copy_to_ptr(out.as_mut_ptr() as *mut T, N);
+            out.assume_init()
+        }
+    }
+
     /// copy contents of a slice to the range
-    pub fn copy_from_slice(&self, slice: &[T]) {
+    pub fn copy_from_slice(&mut self, slice: &[T]) {
         assert_eq!(self.len(), slice.len(), "length mismatch");
         unsafe {
             let (a, b) = (*self.buf).map_range(self.start..self.end);
             (*self.buf).copy_range_from_slice(a, b, slice);
+        }
+    }
+
+    /// copy contents of a raw pointer to the range
+    pub unsafe fn copy_from_ptr(&mut self, dest: *const T, count: usize) {
+        assert_eq!(self.len(), count, "length mismatch");
+        unsafe {
+            let (a, b) = (*self.buf).map_range(self.start..self.end);
+            (*self.buf).copy_range_from_ptr(a, b, dest, count);
         }
     }
 }
@@ -867,12 +920,12 @@ mod test {
         buf.push_front_copy_from_slice(&[0, 1, 2, 3, 4]);
         assert_eq!(buf.get(3), Some(&3));
         assert_eq!(buf.get(7), Some(&7));
-        
+
         let sliced = buf.range(3..6);
         let mut dest = [0u8; 3];
         sliced.copy_to_slice(&mut dest);
         assert_eq!(dest, [3, 4, 5]);
-        
+
         let mut dest = [0u8; 6];
         buf.pop_front_copy_to_slice(&mut dest);
         assert_eq!(dest, [0, 1, 2, 3, 4, 5]);
@@ -885,7 +938,7 @@ mod test {
         let mut buf: RingBuf<u8> = RingBuf::new();
         buf.push_back_copy_from_slice(&[0u8; 4096]);
 
-        let slice_mut = buf.range_mut(1024..2048);
+        let mut slice_mut = buf.range_mut(1024..2048);
         slice_mut.copy_from_slice(&[1u8; 1024]);
 
         buf.drain(..1024);
@@ -905,7 +958,7 @@ mod test {
         let mut buf: RingBuf<String> = RingBuf::new();
         buf.push_back("Hello, ".into());
         buf.push_back("world!".into());
-        
+
         for i in 0..10 {
             buf.push_back(i.to_string());
         }
@@ -915,5 +968,35 @@ mod test {
         let b: Vec<String> = buf.drain(..).collect();
         assert_eq!(b.join(""), "0123456789");
         assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn range_as_slices() {
+        let mut data = [0u8; 256];
+        for (i, v) in data.iter_mut().enumerate() {
+            *v = i as u8;
+        }
+        let mut buf: RingBuf<u8> = RingBuf::with_capacity(data.len());
+        buf.push_back_copy_from_slice(&data[24..]);
+        buf.push_front_copy_from_slice(&data[..24]);
+        let mut range = buf.range_mut(0..buf.len());
+        let (a, b) = range.as_mut_slices();
+        assert_eq!(a, &mut data[..24]);
+        assert_eq!(b, Some(&mut data[24..]));
+
+        let range2 = buf.range(0..4);
+        assert_eq!(range2.read_fixed::<4>(), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn shrink() {
+        let mut buf: RingBuf<u8> = RingBuf::with_capacity(256);
+        buf.push_back_copy_from_slice(&[5u8; 64]);
+        buf.push_front_copy_from_slice(&[6u8; 32]);
+        buf.shrink_to(buf.len());
+        assert_eq!(buf.get(0), Some(&6));
+        assert_eq!(buf.get(16), Some(&6));
+        assert_eq!(buf.get(48), Some(&5));
+        assert_eq!(buf.get(95), Some(&5));
     }
 }
