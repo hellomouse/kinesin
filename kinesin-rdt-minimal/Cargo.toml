@@ -13,6 +13,10 @@ path = "src/lib.rs"
 name = "krdt_demo_1"
 path = "src/bin/demo_1/main.rs"
 
+[[bin]]
+name = "test-benchmark"
+path = "src/bin/test_benchmark/main.rs"
+
 [dependencies]
 anyhow = "1.0.69"
 kinesin-rdt = { path = '../kinesin-rdt' }

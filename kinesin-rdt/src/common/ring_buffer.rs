@@ -405,6 +405,24 @@ impl<T> RingBuf<T> {
         )
     }
 
+    /// obtain reference to element at provided index
+    pub fn get(&self, index: usize) -> Option<&T> {
+        if index < self.len {
+            unsafe { Some(&*self.ptr_at(self.offset_of(index))) }
+        } else {
+            None
+        }
+    }
+
+    /// obtain mutable reference to element at provided index
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        if index < self.len {
+            unsafe { Some(&mut *self.ptr_at(self.offset_of(index))) }
+        } else {
+            None
+        }
+    }
+
     /// clear all elements
     pub fn clear(&mut self) {
         unsafe {
@@ -468,6 +486,41 @@ impl<T> RingBuf<T> {
                 Drain::from_start(self, self.len)
             }
         }
+    }
+}
+
+impl<T: Clone> RingBuf<T> {
+    /// append `count` elements at back by cloning
+    pub fn fill_at_back(&mut self, count: usize, value: T) {
+        self.reserve(count);
+        let (a, b) = self.map_range(self.len..self.len + count);
+
+        unsafe {
+            // for_each is massively faster than a for loop here
+            a.for_each(|i| ptr::write(self.ptr_at(i), value.clone()));
+            if let Some(b) = b {
+                b.for_each(|i| ptr::write(self.ptr_at(i), value.clone()));
+            }
+        }
+
+        self.len += count;
+    }
+
+    /// prepend `count` elements at front by cloning
+    pub fn fill_at_front(&mut self, count: usize, value: T) {
+        self.reserve(count);
+        let new_head = self.offset_of_reverse(count);
+        let (a, b) = self.map_range_explicit(new_head, 0..count);
+
+        unsafe {
+            a.for_each(|i| ptr::write(self.ptr_at(i), value.clone()));
+            if let Some(b) = b {
+                b.for_each(|i| ptr::write(self.ptr_at(i), value.clone()));
+            }
+        }
+
+        self.head = new_head;
+        self.len += count;
     }
 }
 
@@ -579,24 +632,6 @@ impl<T: Copy> RingBuf<T> {
         unsafe { self.copy_range_from_slice(a, b, elements) };
         self.head = new_head;
         self.len += elements.len();
-    }
-
-    /// obtain reference to element at provided index
-    pub fn get(&self, index: usize) -> Option<&T> {
-        if index < self.len {
-            unsafe { Some(&*self.ptr_at(self.offset_of(index))) }
-        } else {
-            None
-        }
-    }
-
-    /// obtain mutable reference to element at provided index
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
-        if index < self.len {
-            unsafe { Some(&mut *self.ptr_at(self.offset_of(index))) }
-        } else {
-            None
-        }
     }
 
     /// pop contents to slice from back by copying
