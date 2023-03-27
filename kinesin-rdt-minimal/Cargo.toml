@@ -5,6 +5,14 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lib]
+name = "krdt_minimal"
+path = "src/lib.rs"
+
+[[bin]]
+name = "krdt_demo_1"
+path = "src/bin/demo_1/main.rs"
+
 [dependencies]
 anyhow = "1.0.69"
 kinesin-rdt = { path = '../kinesin-rdt' }

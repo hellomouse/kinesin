@@ -14,6 +14,11 @@ where
     fn write(&self, buf: &mut [u8]) -> usize;
     /// read frame from buffer, returning frame and serialized length
     fn read(buf: &[u8]) -> Result<(usize, Self), ()>;
+
+    /// whether the frame has special "serialize to end" behavior
+    fn has_end_optimization() -> bool {
+        false
+    }
 }
 
 /// frame serialization allowing optimizations for end-of-packet frames
@@ -34,5 +39,10 @@ where
     /// read last frame of packet from buffer, returning frame
     fn read_to_end(buf: &[u8]) -> Result<Self, ()> {
         Self::read(buf).map(|r| r.1)
+    }
+
+    /// whether the frame has special "serialize to end" behavior
+    fn has_end_optimization() -> bool {
+        true
     }
 }
