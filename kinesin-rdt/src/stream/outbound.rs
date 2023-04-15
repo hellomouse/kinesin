@@ -38,6 +38,8 @@ pub struct StreamOutboundState {
     /// peer inbound flow control receive limit
     pub window_limit: u64,
     /// retransmission strategy on packet loss
+    ///
+    /// It is not currently supported to change this after construction.
     pub retransmit_strategy: RetransmitStrategy,
 
     /// callback on writable
@@ -120,7 +122,7 @@ impl StreamOutboundState {
         if limit > self.window_limit {
             trace!(limit, "window advanced");
             self.window_limit = limit;
-            self.notify_if_readable();
+            self.notify_if_writable();
             true
         } else {
             false
@@ -131,7 +133,6 @@ impl StreamOutboundState {
     pub fn write_direct(&mut self, buf: &[u8]) -> Range<u64> {
         let base = self.buffer_offset + self.buffer.len() as u64;
         let segment = base..(base + buf.len() as u64);
-        self.buffer.reserve(buf.len());
         self.buffer.push_back_copy_from_slice(buf);
         self.queued.insert_range(segment.clone());
         self.notify_if_readable();
@@ -167,6 +168,8 @@ impl StreamOutboundState {
             RetransmitStrategy::Deadline { ref mut limit } => {
                 trace!(limit = new_limit, "update deadline");
                 *limit = new_limit;
+                // mark everything prior as delivered
+                self.delivered.insert_range(0..new_limit);
             }
             _ => panic!("stream not using deadline retransmission"),
         }
@@ -197,19 +200,30 @@ impl StreamOutboundState {
 
         // remove no longer relevant ranges
         self.queued.remove_range(..new_base);
-        self.delivered.remove_range(..new_base);
         if self.message_offsets.len() > 0 {
             self.message_offsets = self.message_offsets.split_off(&new_base);
         }
+
+        // mark everything prior as delivered
+        self.delivered.insert_range(0..new_base);
     }
 
-    pub fn try_advance_buffer(&mut self) {}
+    /// advance buffer if necessary
+    pub fn try_advance_buffer(&mut self) {
+        let Some(first_delivered) = self.delivered.peek_first() else {
+            return;
+        };
+
+        if first_delivered.end > self.buffer_offset {
+            self.advance_buffer(first_delivered.end);
+        }
+    }
 
     /// get next queued segment
     pub fn next_segment(&mut self, data_size_limit: usize) -> Option<Range<u64>> {
         let mut next_queued = self.queued.peek_first()?;
         if let RetransmitStrategy::Deadline { limit } = self.retransmit_strategy {
-            // dequeue everything
+            // dequeue everything before limit
             if next_queued.start < limit {
                 self.queued.remove_range(..limit);
                 next_queued = self.queued.peek_first()?;
@@ -221,14 +235,19 @@ impl StreamOutboundState {
     }
 
     /// get reference to bytes in segment, or none if out of range
-    pub fn read_segment<'a>(&'a self, segment: Range<u64>) -> Option<RingBufSlice<'a, u8>> {
+    ///
+    /// Will return slice and first message marker in range, if one exists.
+    pub fn read_segment<'a>(
+        &'a self,
+        segment: Range<u64>,
+    ) -> Option<(RingBufSlice<'a, u8>, Option<u64>)> {
         let buf_start: usize = segment
             .start
             .checked_sub(self.buffer_offset)?
             .try_into()
             .ok()?;
         let buf_end: usize = segment
-            .start
+            .end
             .checked_sub(self.buffer_offset)?
             .try_into()
             .ok()?;
@@ -238,12 +257,17 @@ impl StreamOutboundState {
         if buf_end >= self.buffer.len() {
             return None;
         }
-        Some(self.buffer.range(buf_start..buf_end))
+        let first_marker = self.message_offsets.range(segment).next().map(|r| *r);
+        Some((self.buffer.range(buf_start..buf_end), first_marker))
     }
 
     /// mark segment as sent
     pub fn segment_sent(&mut self, segment: Range<u64>) {
-        self.queued.remove_range(segment);
+        self.queued.remove_range(segment.clone());
+        if matches!(self.retransmit_strategy, RetransmitStrategy::Unreliable) {
+            // no need to retransmit segments
+            self.delivered.insert_range(segment.clone());
+        }
     }
 
     /// mark segment as lost
@@ -262,8 +286,58 @@ impl StreamOutboundState {
 
 #[cfg(test)]
 pub mod test {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use super::*;
 
     #[test]
-    fn emit_segment() {}
+    fn emit_segment() {
+        tracing_subscriber::fmt::init();
+
+        let did_writable = Rc::new(Cell::new(false));
+        let did_readable = Rc::new(Cell::new(false));
+        let mut outbound = StreamOutboundState::new(
+            0,
+            RetransmitStrategy::Reliable,
+            Some(Box::new({
+                let cell = did_writable.clone();
+                move || cell.set(true)
+            })),
+            Some(Box::new({
+                let cell = did_readable.clone();
+                move || cell.set(true)
+            })),
+        );
+
+        outbound.writable_callback_active = true;
+        outbound.update_remote_limit(4096);
+        assert_eq!(did_writable.get(), true);
+        did_writable.set(false);
+
+        assert_eq!(outbound.writable(), 4096);
+        outbound.readable_callback_active = true;
+        outbound.write_direct(&[5u8; 64]);
+        assert_eq!(did_readable.get(), true);
+        did_readable.set(false);
+
+        let segment = outbound.next_segment(4096).unwrap();
+        assert_eq!(segment, 0..64);
+
+        let segment = outbound.next_segment(8).unwrap();
+        assert_eq!(segment, 0..8);
+        outbound.segment_sent(segment.clone());
+        let mut data = [0u8; 8];
+        let slice = outbound.read_segment(segment.clone()).unwrap();
+        slice.0.copy_to_slice(&mut data);
+        assert_eq!(data, [5u8; 8]);
+
+        let segment_2 = outbound.next_segment(8).unwrap();
+        assert_eq!(segment_2, 8..16);
+        outbound.segment_sent(segment_2.clone());
+        outbound.segment_delivered(segment_2);
+
+        outbound.segment_lost(segment.clone());
+        assert_eq!(outbound.next_segment(4096).unwrap(), 0..8);
+    }
 }
