@@ -1,5 +1,5 @@
-use tracing::{debug, info, trace};
 use krdt_minimal::frame_text::Test;
+use tracing::{debug, info, trace};
 
 fn main() {
     tracing_subscriber::fmt::init();

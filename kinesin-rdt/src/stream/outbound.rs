@@ -15,7 +15,7 @@ pub enum RetransmitStrategy {
 }
 
 /// default outbound buffer size limit
-pub const OUTBOUND_BUFFER_DEFAULT_LIMIT: u64 = 64 * 1024 * 1024;
+pub const OUTBOUND_BUFFER_DEFAULT_LIMIT: usize = 64 * 1024 * 1024;
 
 /// stream outbound delivery
 pub struct StreamOutboundState {
@@ -24,7 +24,7 @@ pub struct StreamOutboundState {
     /// stream offset at which buffer starts
     pub buffer_offset: u64,
     /// outbound buffer size limit
-    pub buffer_limit: u64,
+    pub buffer_limit: usize,
 
     /// segments queued for (re)transmission
     pub queued: RangeSet,
@@ -51,6 +51,9 @@ pub struct StreamOutboundState {
     /// whether readable_callback will be called
     pub readable_callback_active: bool,
 }
+
+// Invariants:
+// - field `delivered` must always contain the range 0..buffer_offset
 
 impl StreamOutboundState {
     pub fn new(
@@ -79,7 +82,7 @@ impl StreamOutboundState {
     /// gets how many bytes are currently writable to the stream
     pub fn writable(&self) -> u64 {
         let rwnd_limit = self.window_limit.saturating_sub(self.buffer_offset);
-        let real_limit = u64::min(rwnd_limit, self.buffer_limit);
+        let real_limit = u64::min(rwnd_limit, self.buffer_limit as u64);
         real_limit.saturating_sub(self.buffer.len() as u64)
     }
 
