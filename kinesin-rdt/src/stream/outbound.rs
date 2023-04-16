@@ -41,15 +41,8 @@ pub struct StreamOutboundState {
     ///
     /// It is not currently supported to change this after construction.
     pub retransmit_strategy: RetransmitStrategy,
-
-    /// callback on writable
-    pub writable_callback: Option<Box<dyn FnMut()>>,
-    /// whether writable_callback will be called
-    pub writable_callback_active: bool,
-    /// callback on readable
-    pub readable_callback: Option<Box<dyn FnMut()>>,
-    /// whether readable_callback will be called
-    pub readable_callback_active: bool,
+    /// final length of stream (offset of final byte + 1)
+    pub final_offset: Option<u64>,
 }
 
 // Invariants:
@@ -59,8 +52,6 @@ impl StreamOutboundState {
     pub fn new(
         initial_window_limit: u64,
         retransmit_strategy: RetransmitStrategy,
-        writable_callback: Option<Box<dyn FnMut()>>,
-        readable_callback: Option<Box<dyn FnMut()>>,
     ) -> StreamOutboundState {
         StreamOutboundState {
             buffer: RingBuf::new(),
@@ -72,10 +63,7 @@ impl StreamOutboundState {
             is_initial_window: true,
             window_limit: initial_window_limit,
             retransmit_strategy,
-            writable_callback,
-            writable_callback_active: false,
-            readable_callback,
-            readable_callback_active: false,
+            final_offset: None,
         }
     }
 
@@ -95,24 +83,22 @@ impl StreamOutboundState {
         }
     }
 
-    /// call writable_callback if writable
-    pub fn notify_if_writable(&mut self) {
-        if self.writable() == 0 || !self.writable_callback_active {
-            return;
-        }
-        if let Some(ref mut callback) = self.writable_callback {
-            self.writable_callback_active = false;
-            callback();
-        }
-    }
-
-    /// call readable_callback if readable
-    pub fn notify_if_readable(&mut self) {
-        if self.readable() && self.readable_callback_active {
-            if let Some(ref mut callback) = self.readable_callback {
-                self.readable_callback_active = false;
-                callback();
+    /// whether stream has delivered all segments
+    ///
+    /// Will return true if a final offset is set and all segments prior to
+    /// that offset have been delivered. In the case of the unreliable
+    /// retransmit mode, segments are considered delivered as soon as they are
+    /// sent. In the deadline transmission mode, segments prior to the deadline
+    /// are considered delivered even if they have not been acknowledged.
+    pub fn finished(&self) -> bool {
+        if let Some(final_offset) = self.final_offset {
+            if let Some(delivered) = self.delivered.peek_first() {
+                delivered.end >= final_offset
+            } else {
+                false
             }
+        } else {
+            false
         }
     }
 
@@ -125,7 +111,6 @@ impl StreamOutboundState {
         if limit > self.window_limit {
             trace!(limit, "window advanced");
             self.window_limit = limit;
-            self.notify_if_writable();
             true
         } else {
             false
@@ -138,7 +123,6 @@ impl StreamOutboundState {
         let segment = base..(base + buf.len() as u64);
         self.buffer.push_back_copy_from_slice(buf);
         self.queued.insert_range(segment.clone());
-        self.notify_if_readable();
         trace!("write {} bytes at offset {}", base, buf.len());
         segment
     }
@@ -153,6 +137,13 @@ impl StreamOutboundState {
             self.write_direct(&buf[0..limit]);
             limit
         }
+    }
+
+    /// mark end of stream
+    pub fn finish(&mut self) {
+        assert!(self.final_offset.is_none(), "stream already finished");
+        // last byte of stream
+        self.final_offset = Some(self.buffer_offset + self.buffer.len() as u64);
     }
 
     /// set message marker at offset
@@ -289,40 +280,17 @@ impl StreamOutboundState {
 
 #[cfg(test)]
 pub mod test {
-    use std::cell::Cell;
-    use std::rc::Rc;
-
     use super::*;
 
     #[test]
     fn emit_segment() {
         tracing_subscriber::fmt::init();
 
-        let did_writable = Rc::new(Cell::new(false));
-        let did_readable = Rc::new(Cell::new(false));
-        let mut outbound = StreamOutboundState::new(
-            0,
-            RetransmitStrategy::Reliable,
-            Some(Box::new({
-                let cell = did_writable.clone();
-                move || cell.set(true)
-            })),
-            Some(Box::new({
-                let cell = did_readable.clone();
-                move || cell.set(true)
-            })),
-        );
+        let mut outbound = StreamOutboundState::new(0, RetransmitStrategy::Reliable);
 
-        outbound.writable_callback_active = true;
         outbound.update_remote_limit(4096);
-        assert_eq!(did_writable.get(), true);
-        did_writable.set(false);
-
         assert_eq!(outbound.writable(), 4096);
-        outbound.readable_callback_active = true;
         outbound.write_direct(&[5u8; 64]);
-        assert_eq!(did_readable.get(), true);
-        did_readable.set(false);
 
         let segment = outbound.next_segment(4096).unwrap();
         assert_eq!(segment, 0..64);
@@ -335,6 +303,9 @@ pub mod test {
         slice.0.copy_to_slice(&mut data);
         assert_eq!(data, [5u8; 8]);
 
+        outbound.finish();
+        assert!(!outbound.finished());
+
         let segment_2 = outbound.next_segment(8).unwrap();
         assert_eq!(segment_2, 8..16);
         outbound.segment_sent(segment_2.clone());
@@ -342,5 +313,13 @@ pub mod test {
 
         outbound.segment_lost(segment.clone());
         assert_eq!(outbound.next_segment(4096).unwrap(), 0..8);
+        outbound.segment_sent(0..8);
+        outbound.segment_delivered(0..8);
+
+        while let Some(segment) = outbound.next_segment(16) {
+            outbound.segment_sent(segment.clone());
+            outbound.segment_delivered(segment.clone());
+        }
+        assert!(outbound.finished());
     }
 }

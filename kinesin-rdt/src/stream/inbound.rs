@@ -23,6 +23,8 @@ pub struct StreamInboundState {
     pub is_reliable: bool,
     /// flow control limit
     pub window_limit: u64,
+    /// final length of stream (offset of final byte + 1)
+    pub final_offset: Option<u64>,
 }
 
 /// result enum of StreamInboundState::receive_segment
@@ -56,6 +58,7 @@ impl StreamInboundState {
             message_offsets: BTreeMap::new(),
             is_reliable,
             window_limit: initial_window_limit,
+            final_offset: None,
         }
     }
 
@@ -130,6 +133,16 @@ impl StreamInboundState {
         self.message_offsets.insert(offset, None);
     }
 
+    /// set final offset from sender
+    pub fn set_final_offset(&mut self, offset: u64) -> bool {
+        if self.final_offset.is_some() {
+            false
+        } else {
+            self.final_offset = Some(offset);
+            true
+        }
+    }
+
     /// advance buffer, discarding data lower than the new base
     pub fn advance_buffer(&mut self, new_base: u64) {
         if new_base < self.buffer_offset {
@@ -200,6 +213,26 @@ impl StreamInboundState {
             Some(self.buffer.range(0..len))
         }
     }
+
+    /// check if stream is fully received
+    /// 
+    /// If unreliable, will return true as soon as a final offset is received,
+    /// even if more segments are in transit.
+    pub fn finished(&self) -> bool {
+        if let Some(final_offset) = self.final_offset {
+            if !self.is_reliable {
+                true
+            } else {
+                if let Some(received) = self.received.peek_first() {
+                    received.end >= final_offset
+                } else {
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -229,11 +262,13 @@ pub mod test {
             inbound.receive_segment(3, &[3]),
             ReceiveSegmentResult::Duplicate
         );
+        assert!(inbound.set_final_offset((hello.len() + world.len()) as u64));
         let slice = inbound.read_next(64).unwrap();
         let mut read: Vec<u8> = Vec::with_capacity(slice.len());
         read.resize(slice.len(), 0);
         slice.copy_to_slice(&mut read);
         let hello2 = String::from_utf8(read).unwrap();
         assert_eq!(hello2, hello + &world);
+        assert!(inbound.finished());
     }
 }
