@@ -107,20 +107,21 @@ impl StreamInboundState {
     }
 
     /// advance window limit
-    pub fn advance_window(&mut self, advance_by: usize) {
+    pub fn set_limit(&mut self, new_limit: u64) {
+        assert!(new_limit >= self.window_limit, "limit cannot go backwards");
+
         // ensure buffer size is within limits
-        let new_limit = self.window_limit + advance_by as u64;
         if new_limit - self.buffer_offset > isize::MAX as u64 {
             panic!("new window limit exceeds maximum buffer capaciity");
         }
 
-        self.window_limit += advance_by as u64;
-
         trace!(
             "advance window limit by {} bytes (window_limit = {})",
-            advance_by,
-            self.window_limit
+            new_limit - self.window_limit,
+            new_limit
         );
+
+        self.window_limit = new_limit;
     }
 
     /// set message marker at offset
@@ -143,7 +144,7 @@ impl StreamInboundState {
         }
     }
 
-    /// advance buffer, discarding data lower than the new base
+    /// advance buffer, discarding data lower than the new base offset
     pub fn advance_buffer(&mut self, new_base: u64) {
         if new_base < self.buffer_offset {
             panic!("cannot advance buffer backwards");
@@ -215,7 +216,7 @@ impl StreamInboundState {
     }
 
     /// check if stream is fully received
-    /// 
+    ///
     /// If unreliable, will return true as soon as a final offset is received,
     /// even if more segments are in transit.
     pub fn finished(&self) -> bool {

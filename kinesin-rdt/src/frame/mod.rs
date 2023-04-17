@@ -3,6 +3,9 @@ pub mod stream;
 
 pub use stream::*;
 
+// TODO: helpers for serialization, maybe macros?
+// TODO: graceful error handling for too-short reads
+
 /// frame serialization
 pub trait Serialize
 where

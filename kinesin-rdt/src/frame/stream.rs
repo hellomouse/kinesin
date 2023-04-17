@@ -168,6 +168,46 @@ impl Serialize for StreamWindowLimit {
     }
 }
 
+impl SerializeToEnd for StreamWindowLimit {}
+
+/// stream final offset
+pub struct StreamFinal {
+    /// stream identifier
+    pub stream_id: u64,
+    /// final byte
+    pub final_offset: u64,
+}
+
+impl Serialize for StreamFinal {
+    fn serialized_length(&self) -> usize {
+        varint8_size(self.stream_id).expect("stream id out of bounds")
+            + varint8_size(self.final_offset).expect("limit out of bounds")
+    }
+
+    fn write(&self, buf: &mut [u8]) -> usize {
+        let mut index = 0;
+        index += write_varint8(&mut buf[index..], self.stream_id).expect("stream id out of bounds");
+        index += write_varint8(&mut buf[index..], self.final_offset)
+            .expect("final_offset out of bounds");
+        index
+    }
+
+    fn read(buf: &[u8]) -> Result<(usize, Self), ()> {
+        let mut index = 0;
+        let (stream_id, len) = read_varint8(&buf[index..])?;
+        index += len;
+        let (final_offset, len) = read_varint8(&buf[index..])?;
+        index += len;
+        let frame = StreamFinal {
+            stream_id,
+            final_offset,
+        };
+        Ok((index, frame))
+    }
+}
+
+impl SerializeToEnd for StreamFinal {}
+
 #[cfg(test)]
 mod test {
     use crate::common::test_util::Zeroed;
@@ -196,7 +236,7 @@ mod test {
     fn stream_limit() {
         let frame = StreamWindowLimit {
             stream_id: 38174897,
-            limit: 993989418939
+            limit: 993989418939,
         };
         let length = frame.serialized_length();
         let mut buf = Vec::zeroed(length);
