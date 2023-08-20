@@ -1,7 +1,9 @@
 [workspace]
+resolver = "2"
 members = [
     "kinesin",
     "kinesin-rdt",
     "kinesin-crypto",
-    "kinesin-rdt-minimal"
+    "kinesin-rdt-minimal",
+    "parse-tcp",
 ]
