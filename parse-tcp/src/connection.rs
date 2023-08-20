@@ -4,11 +4,24 @@ use crate::stream::Stream;
 /// TCP handshake state
 pub enum HandshakeState {
     /// SYN read, expect SYN/ACK
-    SynSent,
+    SynSent {
+        /// sequence number of initial SYN
+        seq_no: u32,
+    },
     /// SYN/ACK read, expect ACK
-    SynReceived,
+    SynReceived {
+        /// sequence number of SYN/ACK
+        seq_no: u32,
+        /// acknowledgment number of SYN/ACK
+        ack_no: u32,
+    },
     /// handshake complete, connection established
-    Established,
+    Established {
+        /// initial sequence number of forward direction
+        forward_isn: u32,
+        /// initial sequence number of reverse direction
+        reverse_isn: u32,
+    },
     /// TCP RST encountered
     Reset,
     /// graceful close
@@ -36,4 +49,8 @@ pub struct Connection {
     pub forward_stream: Stream,
     /// reverse direction stream
     pub reverse_stream: Stream,
+    /// whether forward_stream is valid (false if window desynchronized)
+    pub forward_stream_valid: bool,
+    /// whether reverse_stream is avlid
+    pub reverse_stream_valid: bool,
 }

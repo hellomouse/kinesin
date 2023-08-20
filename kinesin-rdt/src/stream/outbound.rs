@@ -15,7 +15,7 @@ pub enum RetransmitStrategy {
 }
 
 /// default outbound buffer size limit
-pub const OUTBOUND_BUFFER_DEFAULT_LIMIT: usize = 64 * 1024 * 1024;
+pub const OUTBOUND_BUFFER_DEFAULT_LIMIT: usize = 256 << 20; // 256 MB
 
 /// stream outbound delivery
 pub struct StreamOutboundState {

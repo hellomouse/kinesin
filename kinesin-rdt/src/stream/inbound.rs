@@ -201,11 +201,17 @@ impl StreamInboundState {
         Some(self.buffer.range(start..start + len))
     }
 
+    /// return the highest offset into the stream for which no gaps exist
+    /// between it and `buffer_offset`
+    pub fn max_contiguous_offset(&self) -> Option<u64> {
+        self.received.peek_first().map(|r| r.end)
+    }
+
     /// read available bytes from start of buffer
     ///
     /// Only really makes sense when `is_reliable = true`.
     pub fn read_next<'a>(&'a self, limit: usize) -> Option<RingBufSlice<'a, u8>> {
-        let available = self.received.peek_first()?.end;
+        let available = self.max_contiguous_offset()?;
         debug_assert!(available >= self.buffer_offset);
         if self.buffer_offset == available {
             None
@@ -224,8 +230,8 @@ impl StreamInboundState {
             if !self.is_reliable {
                 true
             } else {
-                if let Some(received) = self.received.peek_first() {
-                    received.end >= final_offset
+                if let Some(max_received) = self.max_contiguous_offset() {
+                    max_received >= final_offset
                 } else {
                     false
                 }
