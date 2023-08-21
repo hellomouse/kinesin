@@ -194,7 +194,7 @@ impl StreamOutboundState {
 
         // remove no longer relevant ranges
         self.queued.remove_range(..new_base);
-        if self.message_offsets.len() > 0 {
+        if !self.message_offsets.is_empty() {
             self.message_offsets = self.message_offsets.split_off(&new_base);
         }
 
@@ -231,10 +231,7 @@ impl StreamOutboundState {
     /// get reference to bytes in segment, or none if out of range
     ///
     /// Will return slice and first message marker in range, if one exists.
-    pub fn read_segment<'a>(
-        &'a self,
-        segment: Range<u64>,
-    ) -> Option<(RingBufSlice<'a, u8>, Option<u64>)> {
+    pub fn read_segment(&self, segment: Range<u64>) -> Option<(RingBufSlice<'_, u8>, Option<u64>)> {
         let buf_start: usize = segment
             .start
             .checked_sub(self.buffer_offset)?
@@ -251,7 +248,7 @@ impl StreamOutboundState {
         if buf_end >= self.buffer.len() {
             return None;
         }
-        let first_marker = self.message_offsets.range(segment).next().map(|r| *r);
+        let first_marker = self.message_offsets.range(segment).next().copied();
         Some((self.buffer.range(buf_start..buf_end), first_marker))
     }
 

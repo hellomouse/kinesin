@@ -167,7 +167,7 @@ impl StreamInboundState {
         trace!(delta, "advance buffer");
 
         // discard old message offsets
-        if self.message_offsets.len() > 0 {
+        if !self.message_offsets.is_empty() {
             self.message_offsets = self.message_offsets.split_off(&new_base);
         }
 
@@ -176,7 +176,7 @@ impl StreamInboundState {
     }
 
     /// read segment from buffer, if available
-    pub fn read_segment<'a>(&'a self, segment: Range<u64>) -> Option<RingBufSlice<'a, u8>> {
+    pub fn read_segment(&self, segment: Range<u64>) -> Option<RingBufSlice<'_, u8>> {
         let len: usize = segment
             .end
             .checked_sub(segment.start)
@@ -210,7 +210,7 @@ impl StreamInboundState {
     /// read available bytes from start of buffer
     ///
     /// Only really makes sense when `is_reliable = true`.
-    pub fn read_next<'a>(&'a self, limit: usize) -> Option<RingBufSlice<'a, u8>> {
+    pub fn read_next(&self, limit: usize) -> Option<RingBufSlice<'_, u8>> {
         let available = self.max_contiguous_offset()?;
         debug_assert!(available >= self.buffer_offset);
         if self.buffer_offset == available {
@@ -229,12 +229,10 @@ impl StreamInboundState {
         if let Some(final_offset) = self.final_offset {
             if !self.is_reliable {
                 true
+            } else if let Some(max_received) = self.max_contiguous_offset() {
+                max_received >= final_offset
             } else {
-                if let Some(max_received) = self.max_contiguous_offset() {
-                    max_received >= final_offset
-                } else {
-                    false
-                }
+                false
             }
         } else {
             false
@@ -271,8 +269,7 @@ pub mod test {
         );
         assert!(inbound.set_final_offset((hello.len() + world.len()) as u64));
         let slice = inbound.read_next(64).unwrap();
-        let mut read: Vec<u8> = Vec::with_capacity(slice.len());
-        read.resize(slice.len(), 0);
+        let mut read = vec![0; slice.len()];
         slice.copy_to_slice(&mut read);
         let hello2 = String::from_utf8(read).unwrap();
         assert_eq!(hello2, hello + &world);

@@ -1,4 +1,5 @@
 //! Frame encoding utilities
+#![allow(clippy::result_unit_err)] // todo
 
 /// determine how many bytes are required to encode a varint8
 pub fn varint8_size(n: u64) -> Option<usize> {
@@ -43,7 +44,7 @@ pub fn write_varint8(buf: &mut [u8], n: u64) -> Option<usize> {
 
 /// read varint8 from buffer, returning (value, size)
 pub fn read_varint8(buf: &[u8]) -> Result<(u64, usize), ()> {
-    if buf.len() < 1 {
+    if buf.is_empty() {
         return Err(());
     }
     let length = buf[0] >> 6;
@@ -113,7 +114,7 @@ pub fn write_varint4(buf: &mut [u8], n: u32) -> Option<usize> {
 
 /// read varint4 from buffer, returning (value, size)
 pub fn read_varint4(buf: &[u8]) -> Result<(u32, usize), ()> {
-    if buf.len() < 1 {
+    if buf.is_empty() {
         return Err(());
     }
     let length = buf[0] >> 6;

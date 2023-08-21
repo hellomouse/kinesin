@@ -345,7 +345,7 @@ mod test {
     use super::RangeSet;
 
     fn ensure_consistency(rs: &RangeSet) {
-        assert!(rs.map.len() > 0);
+        assert!(!rs.map.is_empty());
         let mut iter = rs.map.iter();
         let first_el = iter.next().unwrap();
         let mut last_end = first_el.0 + first_el.1;

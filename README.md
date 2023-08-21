@@ -1,3 +1,3 @@
 # Kinesin
 
-The Kinesin mesh network router is probably not vaporware.
+The name is not my fault, probably

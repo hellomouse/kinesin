@@ -1,6 +1,7 @@
+#![allow(clippy::result_unit_err)] // todo
+pub mod buffer_util;
 pub mod encoding;
 pub mod stream;
-pub mod buffer_util;
 
 pub use stream::*;
 

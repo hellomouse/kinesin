@@ -1,3 +1,6 @@
+// TODO: fix documentation
+#![allow(clippy::missing_safety_doc)]
+
 use std::marker::PhantomData;
 use std::mem::{size_of, MaybeUninit};
 use std::ops::{Bound, Range, RangeBounds};
@@ -62,6 +65,7 @@ impl<T> RingBuf<T> {
     }
 
     /// create new buffer with preallocated capacity
+    #[allow(clippy::uninit_vec)] // does not allow access to uninitialized regions
     pub fn with_capacity(capacity: usize) -> RingBuf<T> {
         Self::ensure_type_ok();
         let mut vec = Vec::with_capacity(capacity);
@@ -82,6 +86,11 @@ impl<T> RingBuf<T> {
     /// length of buffer
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    /// whether buffer is empty
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     /// obtain pointer to backing buffer
@@ -113,6 +122,7 @@ impl<T> RingBuf<T> {
     ///
     /// safety warning: will absolutely spit out aliasing mutable references if
     /// asked wrongly
+    #[allow(clippy::mut_from_ref)]
     unsafe fn buf_slice_at_mut(&self, range: Range<usize>) -> &mut [T] {
         slice::from_raw_parts_mut(self.ptr_at(range.start), range.end - range.start)
     }
@@ -219,6 +229,7 @@ impl<T> RingBuf<T> {
     }
 
     /// reserve space for at least `count` more elements
+    #[allow(clippy::uninit_vec)] // does not allow access to uninitialized regions
     pub fn reserve(&mut self, count: usize) {
         let desired_capacity = self.len.checked_add(count).expect("capacity overflow");
         if desired_capacity > self.capacity() {
@@ -365,7 +376,7 @@ impl<T> RingBuf<T> {
     }
 
     /// get immutable reference to range
-    pub fn range<'a>(&'a self, range: Range<usize>) -> RingBufSlice<'a, T> {
+    pub fn range(&self, range: Range<usize>) -> RingBufSlice<T> {
         self.check_range(&range);
         RingBufSlice {
             buf: self,
@@ -375,7 +386,7 @@ impl<T> RingBuf<T> {
     }
 
     /// get mutable reference to range
-    pub fn range_mut<'a>(&'a mut self, range: Range<usize>) -> RingBufSliceMut<'a, T> {
+    pub fn range_mut(&mut self, range: Range<usize>) -> RingBufSliceMut<T> {
         self.check_range(&range);
         RingBufSliceMut {
             buf: self,
@@ -386,7 +397,7 @@ impl<T> RingBuf<T> {
     }
 
     /// get slice(s) corresponding to range
-    unsafe fn range_to_slices<'a>(&'a self, range: Range<usize>) -> (&'a [T], Option<&'a [T]>) {
+    unsafe fn range_to_slices(&self, range: Range<usize>) -> (&[T], Option<&[T]>) {
         let (a, b) = self.map_range(range);
         (self.buf_slice_at(a), b.map(|r| self.buf_slice_at(r)))
     }
@@ -394,10 +405,7 @@ impl<T> RingBuf<T> {
     /// get mutable slice(s) corresponding to range
     ///
     /// safety warning: must ensure slices do not alias
-    unsafe fn range_to_slices_mut<'a>(
-        &'a self,
-        range: Range<usize>,
-    ) -> (&'a mut [T], Option<&'a mut [T]>) {
+    unsafe fn range_to_slices_mut(&mut self, range: Range<usize>) -> (&mut [T], Option<&mut [T]>) {
         let (a, b) = self.map_range(range);
         (
             self.buf_slice_at_mut(a),
@@ -444,7 +452,7 @@ impl<T> RingBuf<T> {
     ///
     /// Currently only supports draining from either the start or the end.
     /// Drained elements are dropped when the iterator is dropped.
-    pub fn drain<'a, R: RangeBounds<usize>>(&'a mut self, range: R) -> Drain<'a, T> {
+    pub fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Drain<T> {
         let lower_bound = match range.start_bound() {
             Bound::Included(&start) => {
                 assert!(start < self.len, "start index out of bounds");
@@ -477,14 +485,12 @@ impl<T> RingBuf<T> {
                 // drain until end
                 Drain::to_end(self, start)
             }
+        } else if let Some(end) = upper_bound {
+            // drain from start
+            Drain::from_start(self, end)
         } else {
-            if let Some(end) = upper_bound {
-                // drain from start
-                Drain::from_start(self, end)
-            } else {
-                // drain everything
-                Drain::from_start(self, self.len)
-            }
+            // drain everything
+            Drain::from_start(self, self.len)
         }
     }
 }
@@ -668,6 +674,11 @@ impl<'a, T> RingBufSlice<'a, T> {
         self.end - self.start
     }
 
+    /// whether slice contains zero elements
+    pub fn is_empty(&self) -> bool {
+        self.end == self.start
+    }
+
     /// get slices representing range
     pub fn as_slices(&self) -> (&'a [T], Option<&'a [T]>) {
         unsafe { self.buf.range_to_slices(self.start..self.end) }
@@ -715,6 +726,11 @@ impl<'a, T> RingBufSliceMut<'a, T> {
     /// get length of slice
     pub fn len(&self) -> usize {
         self.end - self.start
+    }
+
+    /// whether slice contains zero elements
+    pub fn is_empty(&self) -> bool {
+        self.end == self.start
     }
 
     /// get slices representing range

@@ -11,7 +11,9 @@ etherparse = "0.13.0"
 eyre = "0.6.8"
 kinesin-rdt = { path = '../kinesin-rdt' }
 parking_lot = "0.12.1"
+pcap-parser = "0.14.1"
 tokio = { version = "1.27.0", features = ["tracing", "full"] }
 tracing = "0.1.37"
 tracing-error = "0.2.0"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+uuid = { version = "1.4.1", features = ["v4"] }

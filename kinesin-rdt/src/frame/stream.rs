@@ -210,8 +210,6 @@ impl SerializeToEnd for StreamFinal {}
 
 #[cfg(test)]
 mod test {
-    use crate::common::test_util::Zeroed;
-
     use super::*;
     #[test]
     fn stream_data() {
@@ -222,7 +220,7 @@ mod test {
             data: vec![0, 1, 1, 2, 3, 5, 7, 12, 19, 31],
         };
         let length = frame.serialized_length();
-        let mut buf = Vec::zeroed(length);
+        let mut buf = vec![0; length];
         assert_eq!(frame.write(&mut buf), length);
         let (length2, frame2) = StreamData::read(&buf).unwrap();
         assert_eq!(length, length2);
@@ -239,7 +237,7 @@ mod test {
             limit: 993989418939,
         };
         let length = frame.serialized_length();
-        let mut buf = Vec::zeroed(length);
+        let mut buf = vec![0; length];
         assert_eq!(frame.write(&mut buf), length);
         let (length2, frame2) = StreamWindowLimit::read(&buf).unwrap();
         assert_eq!(length, length2);
