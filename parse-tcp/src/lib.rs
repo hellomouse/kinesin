@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 use std::net::IpAddr;
 
+use connection::{Connection, Direction};
+
 pub mod connection;
 pub mod flow_table;
 pub mod stream;
@@ -33,7 +35,7 @@ pub struct TcpMeta {
 }
 
 /// TCP packet flags (at least, the ones we care about)
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct TcpFlags {
     /// SYN flag
     pub syn: bool,
@@ -47,21 +49,56 @@ pub struct TcpFlags {
 
 impl Debug for TcpFlags {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut list = f.debug_list();
+        write!(f, "[")?;
+        let mut has_prev = false;
+        macro_rules! write_flag {
+            ($flag:expr) => {
+                if has_prev {
+                    write!(f, ", ")?;
+                } else {
+                    has_prev = true;
+                }
+                write!(f, $flag)?;
+            }
+        }
         if self.syn {
-            list.entry(&"SYN");
+            write_flag!("SYN");
         }
         if self.ack {
-            list.entry(&"ACK");
+            write_flag!("ACK");
         }
         if self.fin {
-            list.entry(&"FIN");
+            write_flag!("FIN");
         }
         if self.rst {
-            list.entry(&"RST");
+            write_flag!("RST");
         }
+        // silence warning
+        let _ = has_prev;
+        write!(f, "]")?;
         Ok(())
     }
+}
+
+/// event handler for connection object
+pub trait ConnectionHandler
+where
+    Self: Sized,
+{
+    /// construct handler object
+    fn new(connection: &mut Connection<Self>) -> Self;
+    /// called on handshake finish (or incomplete handshake)
+    fn handshake_done(&mut self, _connection: &mut Connection<Self>) {}
+    /// called on data received
+    fn data_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
+    /// called on FIN
+    fn fin_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
+    /// called on RST
+    fn rst_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
+    /// ACK for FIN received for stream
+    fn stream_end(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
+    /// called when the connection is removed from the hashtable
+    fn will_retire(&mut self, _connection: &mut Connection<Self>) {}
 }
 
 pub fn setup_log_handlers() {

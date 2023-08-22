@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::mem;
 use std::net::IpAddr;
 
+use kinesin_rdt::common::ring_buffer::RingBuf;
+
 use crate::connection::Connection;
+use crate::ConnectionHandler;
 use crate::TcpMeta;
 
 #[derive(Debug, Clone)]
@@ -98,11 +101,12 @@ impl std::hash::Hash for Flow {
 }
 
 /// a table of TCP connections
-pub struct FlowTable {
+pub struct FlowTable<H: ConnectionHandler> {
     /// map holding flows by tuple
-    pub map: HashMap<Flow, Connection>,
+    pub map: HashMap<Flow, Connection<H>>,
     /// retired connections (usually closed)
-    pub retired: Vec<Connection>,
+    // hahahahaha watch this explode
+    pub retired: RingBuf<Connection<H>>,
 }
 
 #[cfg(test)]

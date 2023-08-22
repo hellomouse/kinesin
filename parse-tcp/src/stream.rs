@@ -30,6 +30,11 @@ pub struct Stream {
     pub retransmit_count: usize,
     /// count of bytes we do not have due to gaps
     pub gaps_length: u64,
+
+    /// whether a reset happened in this direction
+    pub had_reset: bool,
+    /// true if the FIN for this stream was acked
+    pub has_ended: bool,
 }
 
 impl Stream {
@@ -45,6 +50,8 @@ impl Stream {
             highest_acked: 0,
             retransmit_count: 0,
             gaps_length: 0,
+            had_reset: false,
+            has_ended: false,
         }
     }
 
@@ -64,13 +71,23 @@ impl Stream {
     }
 
     /// set initial sequence number
-    pub fn set_isn(&mut self, isn: u32) {
+    pub fn set_isn(&mut self, isn: u32, window_size: u16) {
         self.initial_sequence_number = isn;
-        self.seq_offset = isn as u64;
+        self.seq_offset = 0;
         self.state.advance_buffer(isn as u64);
         // set seq window to sane initial values
         self.seq_window_start = isn;
         self.seq_window_end = self.seq_window_start.wrapping_add(SEQ_WINDOW_SIZE);
+        // update expected receive window
+        let win_offset = (window_size as u64) << self.window_scale as u64;
+        if win_offset < MAX_ALLOWED_BUFFER_SIZE {
+            let limit = isn as u64 + win_offset;
+            trace!("got initial window limit from handshake: {limit}");
+            self.state.set_limit(limit);
+        } else {
+            warn!("received window size in handshake is too large: {win_offset}");
+            self.state.set_limit(isn as u64 + MAX_ALLOWED_BUFFER_SIZE);
+        }
     }
 
     /// update seq_window and seq_offset based on current window, return whether
@@ -130,7 +147,7 @@ impl Stream {
                 );
 
                 if self.seq_window_start < self.seq_window_end {
-                    // update seq_offset after overflow
+                    // update seq_offset after wrap
                     self.seq_offset += 1 << 32;
                     trace!("seq_window overflow over, advance seq_offset");
                 }
@@ -155,8 +172,9 @@ impl Stream {
             // might have lost a packet or never got window_scale
             debug!(
                 "got packet exceeding the original receiver's window limit: \
-                    seq: {}, len: {}, original window limit: {}",
+                    seq: {}, offset: {}, len: {}, original window limit: {}",
                 sequence_number,
+                offset,
                 data.len(),
                 self.state.window_limit
             );
@@ -208,6 +226,19 @@ impl Stream {
             return false;
         };
 
+        if offset > self.highest_acked {
+            self.highest_acked = offset;
+            trace!("handle_ack_packet: highest ack is {offset}");
+        }
+
+        if let Some(final_seq) = self.state.final_offset {
+            // check if final data packet was acked
+            if self.highest_acked >= final_seq {
+                self.has_ended = true;
+                trace!("handle_ack_packet: fin (offset {final_seq}) got ack (offset {offset})");
+            }
+        }
+
         // set expected window limit
         let limit = offset + ((window_size as u64) << (self.window_scale as u64));
         trace!(
@@ -235,7 +266,6 @@ impl Stream {
             }
         }
 
-        self.highest_acked = offset;
         true
     }
 
@@ -253,6 +283,12 @@ impl Stream {
         match self.state.final_offset {
             None => {
                 self.state.set_final_offset(fin_offset);
+                trace!(
+                    "handle_fin_packet: seq: {}, len: {}, final offset: {}",
+                    sequence_number,
+                    data_len,
+                    fin_offset
+                );
             }
             Some(prev_fin) => {
                 if fin_offset != prev_fin {
@@ -261,6 +297,7 @@ impl Stream {
                         prev_fin, fin_offset
                     );
                 }
+                trace!("handle_fin_packet: detected retransmitted FIN");
                 // otherwise it is just retransmit
             }
         }
