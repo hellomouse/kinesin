@@ -12,6 +12,7 @@ use parse_tcp::{initialize_logging, ConnectionHandler, PacketExtra};
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::{LegacyPcapReader, Linktype, PcapBlockOwned, PcapError};
 use tracing::info;
+use tracing::trace;
 
 /*
 fn dump_as_ascii(buf: &[u8]) {
@@ -27,26 +28,33 @@ fn dump_as_ascii(buf: &[u8]) {
 }
 */
 
-fn dump_as_readable_ascii(buf: &[u8]) {
+fn dump_as_readable_ascii(buf: &[u8], newline: bool) {
     let mut writer = BufWriter::new(std::io::stdout());
-    buf.iter().copied().map(|v| {
-        if (b' '..=b'~').contains(&v) || v == b'\n' {
-            v
-        } else {
-            b'.'
-        }
-    }).for_each(|v| writer.write_all(&[v]).expect("failed write"));
-    let _ = writer.write_all(b"\n");
+    buf.iter()
+        .copied()
+        .map(|v| {
+            if (b' '..=b'~').contains(&v) || v == b'\n' {
+                v
+            } else {
+                b'.'
+            }
+        })
+        .for_each(|v| writer.write_all(&[v]).expect("failed write"));
+    if newline {
+        let _ = writer.write_all(b"\n");
+    }
 }
 
 struct DumpHandler {
     gaps: Vec<Range<u64>>,
     segments: Vec<SegmentInfo>,
     buf: Vec<u8>,
+    forward_has_data: bool,
+    reverse_has_data: bool,
 }
 
 impl DumpHandler {
-    fn do_something(&mut self, connection: &mut Connection<Self>, direction: Direction) {
+    fn dump_stream(&mut self, connection: &mut Connection<Self>, direction: Direction) {
         self.gaps.clear();
         self.segments.clear();
         self.buf.clear();
@@ -55,7 +63,7 @@ impl DumpHandler {
         if direction == Direction::Reverse {
             flow.reverse();
         }
-        info!("{} id {}", flow, connection.uuid);
+        println!("\n====================\n{} ({})", flow, connection.uuid);
         let stream = connection.get_stream(direction);
         let dump_len = if stream.readable_buffered_length() > 0 {
             stream.readable_buffered_length()
@@ -63,7 +71,7 @@ impl DumpHandler {
             stream.total_buffered_length().min(128 << 10)
         };
         let end_offset = stream.buffer_start() + dump_len as u64;
-        info!("requesting length {dump_len}");
+        println!("  length: {dump_len}\n\n");
         stream.read_next(end_offset, &mut self.segments, &mut self.gaps, |slice| {
             let (a, b) = slice.as_slices();
             self.buf.extend_from_slice(a);
@@ -78,6 +86,7 @@ impl DumpHandler {
         info!("segments (length {})", self.segments.len());
         for segment in &self.segments {
             info!(" offset {}", segment.offset);
+            info!(" reverse acked: {}", segment.reverse_acked);
             match segment.data {
                 SegmentType::Data { len, is_retransmit } => {
                     info!(" type: data");
@@ -94,7 +103,7 @@ impl DumpHandler {
             }
         }
         info!("data (length {})", self.buf.len());
-        dump_as_readable_ascii(&self.buf);
+        dump_as_readable_ascii(&self.buf, true);
     }
 }
 
@@ -105,21 +114,43 @@ impl ConnectionHandler for DumpHandler {
             gaps: Vec::new(),
             segments: Vec::new(),
             buf: Vec::new(),
+            forward_has_data: false,
+            reverse_has_data: false,
         }
     }
 
     fn data_received(&mut self, connection: &mut Connection<Self>, direction: Direction) {
-        let stream = connection.get_stream(direction);
-        if stream.readable_buffered_length() >= 64 << 10
-            || stream.total_buffered_length() >= 1 << 20
-        {
-            self.do_something(connection, direction);
+        let (fwd_data, rev_data) = match direction {
+            Direction::Forward => (&mut self.forward_has_data, &mut self.reverse_has_data),
+            Direction::Reverse => (&mut self.reverse_has_data, &mut self.forward_has_data),
+        };
+        let fwd_readable_len = connection.get_stream(direction).readable_buffered_length();
+        *fwd_data = fwd_readable_len > 0;
+
+        // dump reverse stream buffer if it has data
+        if *rev_data {
+            let rev_stream = connection.get_stream(direction.swap());
+            if rev_stream.readable_buffered_length() > 0 {
+                trace!("reverse stream has data, will dump");
+                self.dump_stream(connection, direction.swap());
+            }
+        }
+
+        // dump forward stream if limits hit
+        let fwd_stream = connection.get_stream(direction);
+        if fwd_readable_len > 64 << 10 || fwd_stream.total_buffered_length() > 256 << 10 {
+            trace!("forward stream exceeded limits, will dump");
+            self.dump_stream(connection, direction);
         }
     }
 
     fn will_retire(&mut self, connection: &mut Connection<Self>) {
-        self.do_something(connection, Direction::Forward);
-        self.do_something(connection, Direction::Reverse);
+        if connection.get_stream(Direction::Forward).total_buffered_length() > 0 {
+            self.dump_stream(connection, Direction::Forward);
+        }
+        if connection.get_stream(Direction::Reverse).total_buffered_length() > 0 {
+            self.dump_stream(connection, Direction::Reverse);
+        }
     }
 }
 

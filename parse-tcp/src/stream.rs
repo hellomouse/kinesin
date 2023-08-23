@@ -27,6 +27,8 @@ pub struct Stream {
     pub seq_offset: SeqOffset,
     /// window scale
     pub window_scale: u8,
+    /// if the window scale was captured (if not, try to estimate)
+    pub got_window_scale: bool,
     /// stream state
     pub state: StreamInboundState,
     /// lowest acceptable TCP sequence number (used to disambiguate absolute offset)
@@ -60,6 +62,7 @@ impl Stream {
             initial_sequence_number: 0,
             seq_offset: SeqOffset::Initial(0),
             window_scale: 0,
+            got_window_scale: false,
             state: StreamInboundState::new(0, true),
             seq_window_start: 0,
             seq_window_end: 0,
@@ -102,7 +105,39 @@ impl Stream {
             false
         } else {
             self.window_scale = window_scale;
+            self.got_window_scale = true;
             true
+        }
+    }
+
+    /// if window scale was not received, try to estimate it
+    pub fn estimate_window_scale(&mut self, fit_end_offset: u64) -> bool {
+        debug_assert!(fit_end_offset > self.state.window_limit);
+        let window_available = self.state.window_limit - self.highest_acked;
+        trace!("available window: {window_available}");
+        if window_available < 512 {
+            // not enough space to estimate
+            return false;
+        }
+        let mut try_scale = self.window_scale;
+        let unscaled = window_available >> self.window_scale;
+        if unscaled == 0 {
+            return false;
+        }
+        let mut new_limit = self.highest_acked + (unscaled << try_scale);
+        loop {
+            if try_scale >= 14 {
+                return false;
+            }
+            if new_limit < fit_end_offset {
+                try_scale += 1;
+                new_limit = self.highest_acked + (unscaled << try_scale);
+            } else {
+                debug!("estimating window scale to be {try_scale}");
+                self.window_scale = try_scale;
+                self.state.set_limit(new_limit);
+                return true;
+            }
         }
     }
 
@@ -224,8 +259,17 @@ impl Stream {
             );
             // try to extend the window limit
             if packet_end_offset - self.state.buffer_offset < MAX_ALLOWED_BUFFER_SIZE {
-                trace!("extending window limit due to out-of-window packet");
-                self.state.set_limit(packet_end_offset);
+                if !self.got_window_scale {
+                    if self.estimate_window_scale(packet_end_offset) {
+                        debug_assert!(self.state.window_limit >= packet_end_offset);
+                    } else {
+                        trace!("cannot estimate window scale");
+                        self.state.set_limit(packet_end_offset);
+                    }
+                } else {
+                    trace!("extending window limit due to out-of-window packet");
+                    self.state.set_limit(packet_end_offset);
+                }
             } else {
                 let max_offset = self.state.buffer_offset + MAX_ALLOWED_BUFFER_SIZE;
                 let max_len = max_offset.saturating_sub(offset) as usize;
@@ -336,6 +380,12 @@ impl Stream {
                 self.state
                     .set_limit(self.state.buffer_offset + MAX_ALLOWED_BUFFER_SIZE);
             } else {
+                trace!(
+                    "received window increase: {} -> {} ({} bytes)",
+                    offset,
+                    limit,
+                    real_window
+                );
                 self.state.set_limit(limit);
             }
         }
