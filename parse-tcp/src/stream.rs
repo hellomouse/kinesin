@@ -446,6 +446,10 @@ impl Stream {
             warn!("requested read of range that no longer exists");
             return false;
         }
+        if end_offset == start_offset {
+            // don't return zero-length reads
+            return false;
+        }
         if (end_offset - start_offset) as usize > self.state.buffer.len() {
             warn!("requested read of range past end of buffer");
             return false;

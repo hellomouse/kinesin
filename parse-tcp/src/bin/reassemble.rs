@@ -63,7 +63,7 @@ impl DumpHandler {
         }
         info!("segments (length {})", self.segments.len());
         for segment in &self.segments {
-            info!("  offset {}", segment.offset);
+            info!(" offset {}", segment.offset);
             match segment.data {
                 SegmentType::Data { len, is_retransmit } => {
                     info!(" type: data");
