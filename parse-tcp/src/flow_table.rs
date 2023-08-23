@@ -1,11 +1,16 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::mem;
 use std::net::IpAddr;
 
 use kinesin_rdt::common::ring_buffer::RingBuf;
+use tracing::debug;
+use tracing::warn;
 
 use crate::connection::Connection;
+use crate::connection::ConnectionState;
 use crate::ConnectionHandler;
+use crate::PacketExtra;
 use crate::TcpMeta;
 
 #[derive(Debug, Clone)]
@@ -61,6 +66,28 @@ impl From<TcpMeta> for Flow {
     }
 }
 
+impl Display for Flow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        macro_rules! fmt_addr {
+            ($addr:expr) => {
+                match $addr {
+                    IpAddr::V4(addr) => addr.fmt(f)?,
+                    IpAddr::V6(addr) => {
+                        write!(f, "[")?;
+                        addr.fmt(f)?;
+                        write!(f, "]")?;
+                    }
+                }
+            };
+        }
+        fmt_addr!(self.src_addr);
+        write!(f, ":{} -> ", self.src_port)?;
+        fmt_addr!(self.dst_addr);
+        write!(f, ":{}", self.dst_port)?;
+        Ok(())
+    }
+}
+
 /// result of FlowId::compare
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlowCompare {
@@ -107,6 +134,65 @@ pub struct FlowTable<H: ConnectionHandler> {
     /// retired connections (usually closed)
     // hahahahaha watch this explode
     pub retired: RingBuf<Connection<H>>,
+}
+
+impl<H: ConnectionHandler> FlowTable<H> {
+    /// create new instance
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            retired: RingBuf::new(),
+        }
+    }
+
+    /// handle a packet
+    pub fn handle_packet(&mut self, meta: TcpMeta, data: &[u8], extra: PacketExtra) -> bool {
+        let flow = meta.clone().into();
+        let did_something;
+        match self.map.get_mut(&flow) {
+            Some(conn) => {
+                did_something = conn.handle_packet(meta, data, extra);
+                if conn.conn_state == ConnectionState::Closed {
+                    // remove flow if connection is no more
+                    self.retire_flow(flow);
+                }
+                did_something
+            }
+            None => {
+                let conn = Connection::new(flow.clone());
+                debug!("new flow: {} {flow}", conn.uuid);
+                self.map.insert(flow, conn);
+                self.handle_packet(meta, data, extra)
+            }
+        }
+    }
+
+    pub fn retire_flow(&mut self, flow_id: Flow) {
+        let Some(mut conn) = self.map.remove(&flow_id) else {
+            warn!("retire_flow called on non-existent flow?: {flow_id}");
+            return;
+        };
+
+        debug!("remove flow: {} {flow_id}", conn.uuid);
+        conn.will_retire();
+        self.retired.push_back(conn);
+    }
+
+    /// close flowtable and retire all flows
+    pub fn close(&mut self) {
+        debug!("flowtable closing");
+        for (flow, mut conn) in self.map.drain() {
+            debug!("remove flow: {} {flow}", conn.uuid);
+            conn.will_retire();
+            self.retired.push_back(conn);
+        }
+    }
+}
+
+impl<H: ConnectionHandler> Default for FlowTable<H> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

@@ -5,11 +5,11 @@ use uuid::Uuid;
 
 use crate::flow_table::{Flow, FlowCompare};
 use crate::stream::Stream;
-use crate::ConnectionHandler;
 use crate::TcpMeta;
+use crate::{ConnectionHandler, PacketExtra};
 
 /// TCP handshake state
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ConnectionState {
     /// not yet initialized
     None,
@@ -117,9 +117,17 @@ impl<H: ConnectionHandler> Connection<H> {
         conn
     }
 
+    /// get stream in direction
+    pub fn get_stream(&mut self, direction: Direction) -> &mut Stream {
+        match direction {
+            Direction::Forward => &mut self.forward_stream,
+            Direction::Reverse => &mut self.reverse_stream,
+        }
+    }
+
     /// handle a packet supposedly belonging to this connection
     #[tracing::instrument(name = "conn", skip_all, fields(id = %self.uuid))]
-    pub fn handle_packet(&mut self, meta: TcpMeta, data: &[u8]) -> bool {
+    pub fn handle_packet(&mut self, meta: TcpMeta, data: &[u8], extra: PacketExtra) -> bool {
         debug_assert_ne!(self.forward_flow.compare_tcp_meta(&meta), FlowCompare::None);
         if meta.flags.syn {
             self.handle_syn(meta)
@@ -127,7 +135,7 @@ impl<H: ConnectionHandler> Connection<H> {
             self.handle_rst(meta)
         } else {
             // FIN packets handled here too, as they may carry data
-            self.handle_data(meta, data)
+            self.handle_data(meta, data, extra)
         }
     }
 
@@ -155,7 +163,7 @@ impl<H: ConnectionHandler> Connection<H> {
                     );
                     if let Some(scale) = meta.option_window_scale {
                         trace!("got window scale (SYN/ACK): {}", scale);
-                        self.reverse_stream.window_scale = scale;
+                        self.reverse_stream.set_window_scale(scale);
                     }
                     if self.forward_flow.compare_tcp_meta(&meta) == FlowCompare::Forward {
                         // SYN/ACK is expected server -> client
@@ -174,7 +182,7 @@ impl<H: ConnectionHandler> Connection<H> {
                     );
                     if let Some(scale) = meta.option_window_scale {
                         trace!("got window scale (first SYN): {}", scale);
-                        self.forward_stream.window_scale = scale;
+                        self.forward_stream.set_window_scale(scale);
                     }
                     if self.forward_flow.compare_tcp_meta(&meta) == FlowCompare::Reverse {
                         // SYN is expected client -> server
@@ -212,7 +220,7 @@ impl<H: ConnectionHandler> Connection<H> {
                         );
                         if let Some(scale) = meta.option_window_scale {
                             trace!("got window scale (SYN/ACK): {}", scale);
-                            self.reverse_stream.window_scale = scale;
+                            self.reverse_stream.set_window_scale(scale);
                         }
                         true
                     }
@@ -255,7 +263,7 @@ impl<H: ConnectionHandler> Connection<H> {
     }
 
     /// handle data packet received before SYN/ACK
-    pub fn handle_data_hs1(&mut self, meta: TcpMeta, data: &[u8]) -> bool {
+    pub fn handle_data_hs1(&mut self, meta: TcpMeta, data: &[u8], extra: PacketExtra) -> bool {
         trace!(
             "handle_data_hs1: received data before handshake completion, {:?} -> Established",
             self.conn_state
@@ -279,22 +287,24 @@ impl<H: ConnectionHandler> Connection<H> {
         self.call_handler(|conn, h| h.handshake_done(conn));
 
         if !data.is_empty() {
-            self.handle_data_established(meta, data)
+            self.handle_data_established(meta, data, extra)
         } else {
             true
         }
     }
 
     /// handle data packet received after SYN/ACK
-    pub fn handle_data_hs2(
-        &mut self,
-        meta: TcpMeta,
-        data: &[u8],
-        seq_no: u32,
-        ack_no: u32,
-        forward_window: u16,
-        syn_seen: bool,
-    ) -> bool {
+    pub fn handle_data_hs2(&mut self, meta: TcpMeta, data: &[u8], extra: PacketExtra) -> bool {
+        let ConnectionState::SynReceived {
+            seq_no,
+            ack_no,
+            window_size: forward_window,
+            syn_seen,
+        } = self.conn_state
+        else {
+            panic!("handle_data_hs2: wrong state");
+        };
+
         let mut reverse_window: u16 = 0;
         let (forward_isn, reverse_isn) = match self.forward_flow.compare_tcp_meta(&meta) {
             FlowCompare::Forward => {
@@ -331,14 +341,19 @@ impl<H: ConnectionHandler> Connection<H> {
         self.call_handler(|conn, h| h.handshake_done(conn));
 
         if !data.is_empty() {
-            self.handle_data_established(meta, data)
+            self.handle_data_established(meta, data, extra)
         } else {
             true
         }
     }
 
     /// handle data after handshake is completed
-    pub fn handle_data_established(&mut self, meta: TcpMeta, data: &[u8]) -> bool {
+    pub fn handle_data_established(
+        &mut self,
+        meta: TcpMeta,
+        data: &[u8],
+        extra: PacketExtra,
+    ) -> bool {
         let dir;
         let (data_stream, ack_stream) = match self.forward_flow.compare_tcp_meta(&meta) {
             FlowCompare::Forward => {
@@ -357,7 +372,8 @@ impl<H: ConnectionHandler> Connection<H> {
         if !data.is_empty() {
             // write data to stream
             let sp = info_span!("stream", %dir);
-            got_data = sp.in_scope(|| data_stream.handle_data_packet(meta.seq_number, data));
+            got_data = sp
+                .in_scope(|| data_stream.handle_data_packet(meta.seq_number, data, extra.clone()));
             did_something |= got_data;
         }
         let mut ack_stream_got_end = false;
@@ -365,8 +381,9 @@ impl<H: ConnectionHandler> Connection<H> {
             let was_ended = ack_stream.has_ended;
             // send ack to the stream in the opposite direction
             let sp = info_span!("stream", dir = %dir.swap());
-            did_something |=
-                sp.in_scope(|| ack_stream.handle_ack_packet(meta.ack_number, meta.window));
+            did_something |= sp.in_scope(|| {
+                ack_stream.handle_ack_packet(meta.ack_number, meta.window, extra.clone())
+            });
             if !was_ended && ack_stream.has_ended {
                 ack_stream_got_end = true;
                 trace!("handle_data: {:?} received ACK for FIN", dir.swap());
@@ -377,7 +394,9 @@ impl<H: ConnectionHandler> Connection<H> {
         if meta.flags.fin {
             // notify stream of fin
             let sp = info_span!("stream", %dir);
-            got_fin = sp.in_scope(|| data_stream.handle_fin_packet(meta.seq_number, data.len()));
+            got_fin = sp.in_scope(|| {
+                data_stream.handle_fin_packet(meta.seq_number, data.len(), extra.clone())
+            });
             did_something |= got_fin;
         }
 
@@ -403,20 +422,15 @@ impl<H: ConnectionHandler> Connection<H> {
     }
 
     /// handle ordinary data packet
-    pub fn handle_data(&mut self, meta: TcpMeta, data: &[u8]) -> bool {
+    pub fn handle_data(&mut self, meta: TcpMeta, data: &[u8], extra: PacketExtra) -> bool {
         match self.conn_state {
             ConnectionState::None | ConnectionState::SynSent { .. } => {
-                self.handle_data_hs1(meta, data)
+                self.handle_data_hs1(meta, data, extra)
             }
-            ConnectionState::SynReceived {
-                seq_no,
-                ack_no,
-                window_size,
-                syn_seen,
-            } => self.handle_data_hs2(meta, data, seq_no, ack_no, window_size, syn_seen),
+            ConnectionState::SynReceived { .. } => self.handle_data_hs2(meta, data, extra),
             _ => {
                 // established or (closed but more data)
-                self.handle_data_established(meta, data)
+                self.handle_data_established(meta, data, extra)
             }
         }
     }
@@ -437,7 +451,7 @@ impl<H: ConnectionHandler> Connection<H> {
 
 #[cfg(test)]
 mod test {
-    use crate::{initialize_logging, ConnectionHandler, TcpFlags, TcpMeta};
+    use crate::{initialize_logging, ConnectionHandler, PacketExtra, TcpFlags, TcpMeta};
     use parking_lot::Mutex;
     use std::mem;
 
@@ -517,23 +531,23 @@ mod test {
         };
 
         let mut conn: Connection<TestHandler> = Connection::new(hs1.clone().into());
-        assert!(conn.handle_packet(hs1.clone(), &[]));
+        assert!(conn.handle_packet(hs1.clone(), &[], PacketExtra::None));
         let mut hs2 = swap_meta(&hs1);
         hs2.seq_number = 315848;
         hs2.ack_number += 1;
         hs2.flags.ack = true;
-        assert!(conn.handle_packet(hs2.clone(), &[]));
+        assert!(conn.handle_packet(hs2.clone(), &[], PacketExtra::None));
         let mut hs3 = swap_meta(&hs2);
         hs3.ack_number += 1;
         hs3.flags.syn = false;
-        assert!(conn.handle_packet(hs3.clone(), &[]));
+        assert!(conn.handle_packet(hs3.clone(), &[], PacketExtra::None));
 
         let mut hs_done = HANDSHAKE_DONE.lock();
         assert!(*hs_done);
         *hs_done = false;
 
         let data1 = hs3.clone();
-        assert!(conn.handle_packet(data1.clone(), b"test"));
+        assert!(conn.handle_packet(data1.clone(), b"test", PacketExtra::None));
         assert_eq!(conn.forward_stream.readable_buffered_length(), 4);
     }
 }

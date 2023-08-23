@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 use std::ops::{Bound, Range, RangeBounds};
 
-// TODO: this is apparently massively horrible
+// TODO: this is apparently massively horrible, ditch ranges and use start/len
+// directly to clean up the mess
 /// Set of ranges implemented with a BTreeMap. No overlapping ranges are
 /// allowed. Consecutive ranges are merged. Representable ranges are
 /// [0, u64::MAX).

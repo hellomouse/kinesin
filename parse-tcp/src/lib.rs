@@ -5,6 +5,7 @@ use connection::{Connection, Direction};
 
 pub mod connection;
 pub mod flow_table;
+pub mod parser;
 pub mod stream;
 
 /// TCP packet metadata
@@ -59,7 +60,7 @@ impl Debug for TcpFlags {
                     has_prev = true;
                 }
                 write!(f, $flag)?;
-            }
+            };
         }
         if self.syn {
             write_flag!("SYN");
@@ -99,6 +100,20 @@ where
     fn stream_end(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
     /// called when the connection is removed from the hashtable
     fn will_retire(&mut self, _connection: &mut Connection<Self>) {}
+}
+
+/// extra information that may be associated with the packet
+#[derive(Clone)]
+pub enum PacketExtra {
+    None,
+    LegacyPcap {
+        /// packet number
+        index: u64,
+        /// timestamp (seconds)
+        ts_sec: u32,
+        /// timestamp (microseconds)
+        ts_usec: u32,
+    },
 }
 
 pub fn setup_log_handlers() {
