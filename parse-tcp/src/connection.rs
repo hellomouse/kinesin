@@ -101,7 +101,7 @@ pub enum HandlePacketResult {
 
 impl<H: ConnectionHandler> Connection<H> {
     /// create new connection with flow
-    pub fn new(forward_flow: Flow) -> Connection<H> {
+    pub fn new(forward_flow: Flow, handler_init_data: H::InitialData) -> Connection<H> {
         let mut conn = Connection {
             uuid: Uuid::new_v4(),
             forward_flow,
@@ -112,7 +112,7 @@ impl<H: ConnectionHandler> Connection<H> {
             reverse_stream: Stream::new(),
             event_handler: None,
         };
-        let handler = H::new(&mut conn);
+        let handler = H::new(handler_init_data, &mut conn);
         conn.event_handler = Some(handler);
         conn
     }
@@ -376,14 +376,19 @@ impl<H: ConnectionHandler> Connection<H> {
                 .in_scope(|| data_stream.handle_data_packet(meta.seq_number, data, extra.clone()));
             did_something |= got_data;
         }
+        let mut got_ack = false;
         let mut ack_stream_got_end = false;
         if meta.flags.ack {
             let was_ended = ack_stream.has_ended;
             // send ack to the stream in the opposite direction
             let sp = info_span!("stream", dir = %dir.swap());
-            did_something |= sp.in_scope(|| {
+            got_ack |= sp.in_scope(|| {
                 ack_stream.handle_ack_packet(meta.ack_number, meta.window, extra.clone())
             });
+            did_something |= got_ack;
+            // set ack offset on stream to correlate directions
+            data_stream.reverse_acked = ack_stream.highest_acked;
+
             if !was_ended && ack_stream.has_ended {
                 ack_stream_got_end = true;
                 trace!("handle_data: {:?} received ACK for FIN", dir.swap());
@@ -402,7 +407,10 @@ impl<H: ConnectionHandler> Connection<H> {
 
         // call event handlers
         if got_data {
-            self.call_handler(|conn, h| h.data_received(conn, dir))
+            self.call_handler(|conn, h| h.data_received(conn, dir));
+        }
+        if got_ack {
+            self.call_handler(|conn, h| h.ack_received(conn, dir));
         }
         if got_fin {
             self.call_handler(|conn, h| h.fin_received(conn, dir));
@@ -481,7 +489,8 @@ mod test {
 
     struct TestHandler;
     impl ConnectionHandler for TestHandler {
-        fn new(_conn: &mut Connection<Self>) -> Self {
+        type InitialData = ();
+        fn new(_init: (), _conn: &mut Connection<Self>) -> Self {
             TestHandler
         }
         fn handshake_done(&mut self, _conn: &mut Connection<Self>) {
@@ -530,7 +539,7 @@ mod test {
             option_timestamp: None,
         };
 
-        let mut conn: Connection<TestHandler> = Connection::new(hs1.clone().into());
+        let mut conn: Connection<TestHandler> = Connection::new(hs1.clone().into(), ());
         assert!(conn.handle_packet(hs1.clone(), &[], PacketExtra::None));
         let mut hs2 = swap_meta(&hs1);
         hs2.seq_number = 315848;

@@ -134,14 +134,17 @@ pub struct FlowTable<H: ConnectionHandler> {
     /// retired connections (usually closed)
     // hahahahaha watch this explode
     pub retired: RingBuf<Connection<H>>,
+    /// initial data for ConnectionHandler
+    pub handler_init_data: H::InitialData,
 }
 
 impl<H: ConnectionHandler> FlowTable<H> {
     /// create new instance
-    pub fn new() -> Self {
+    pub fn new(handler_init_data: H::InitialData) -> Self {
         Self {
             map: HashMap::new(),
             retired: RingBuf::new(),
+            handler_init_data,
         }
     }
 
@@ -159,7 +162,7 @@ impl<H: ConnectionHandler> FlowTable<H> {
                 did_something
             }
             None => {
-                let conn = Connection::new(flow.clone());
+                let conn = Connection::new(flow.clone(), self.handler_init_data.clone());
                 debug!("new flow: {} {flow}", conn.uuid);
                 self.map.insert(flow, conn);
                 self.handle_packet(meta, data, extra)
@@ -186,12 +189,6 @@ impl<H: ConnectionHandler> FlowTable<H> {
             conn.will_retire();
             self.retired.push_back(conn);
         }
-    }
-}
-
-impl<H: ConnectionHandler> Default for FlowTable<H> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

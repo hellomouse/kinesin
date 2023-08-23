@@ -99,7 +99,8 @@ impl DumpHandler {
 }
 
 impl ConnectionHandler for DumpHandler {
-    fn new(_conn: &mut Connection<Self>) -> Self {
+    type InitialData = ();
+    fn new(_init: (), _conn: &mut Connection<Self>) -> Self {
         DumpHandler {
             gaps: Vec::new(),
             segments: Vec::new(),
@@ -133,7 +134,7 @@ fn main() -> eyre::Result<()> {
     let mut pcap_reader =
         LegacyPcapReader::new(65536, file).wrap_err("failed to create LegacyPcapReader")?;
     let mut parser = Parser::new();
-    let mut flowtable: FlowTable<DumpHandler> = FlowTable::new();
+    let mut flowtable: FlowTable<DumpHandler> = FlowTable::new(());
     let mut packet_counter = 0u64;
     loop {
         match pcap_reader.next() {

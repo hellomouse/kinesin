@@ -35,6 +35,8 @@ pub struct Stream {
     pub seq_window_end: u32,
     /// highest offset at which we have received an ack
     pub highest_acked: u64,
+    /// highest acked offset of opposite stream
+    pub reverse_acked: u64,
 
     /// whether a reset happened in this direction
     pub had_reset: bool,
@@ -62,6 +64,7 @@ impl Stream {
             seq_window_start: 0,
             seq_window_end: 0,
             highest_acked: 0,
+            reverse_acked: 0,
             had_reset: false,
             has_ended: false,
             gaps_length: 0,
@@ -270,6 +273,7 @@ impl Stream {
 
         self.add_segment_info(SegmentInfo {
             offset,
+            reverse_acked: self.reverse_acked,
             extra,
             data: SegmentType::Data {
                 len: data.len(),
@@ -338,6 +342,7 @@ impl Stream {
 
         self.add_segment_info(SegmentInfo {
             offset,
+            reverse_acked: self.reverse_acked,
             extra,
             data: SegmentType::Ack {
                 window: real_window as usize,
@@ -387,6 +392,7 @@ impl Stream {
 
         self.add_segment_info(SegmentInfo {
             offset,
+            reverse_acked: self.reverse_acked,
             extra,
             data: SegmentType::Fin {
                 end_offset: fin_offset,
@@ -473,8 +479,13 @@ impl Default for Stream {
 
 /// information on each segment received
 pub struct SegmentInfo {
+    /// offset into stream of this segment
     pub offset: u64,
+    /// highest acked offset of opposite stream
+    pub reverse_acked: u64,
+    /// extra metadata from packet
     pub extra: PacketExtra,
+    /// segment type and type-specific info
     pub data: SegmentType,
 }
 

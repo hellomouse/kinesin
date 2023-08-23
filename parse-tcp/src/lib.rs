@@ -86,12 +86,16 @@ pub trait ConnectionHandler
 where
     Self: Sized,
 {
+    /// initial data provided to new
+    type InitialData: Clone;
     /// construct handler object
-    fn new(connection: &mut Connection<Self>) -> Self;
+    fn new(init_data: Self::InitialData, connection: &mut Connection<Self>) -> Self;
     /// called on handshake finish (or incomplete handshake)
     fn handshake_done(&mut self, _connection: &mut Connection<Self>) {}
     /// called on data received
     fn data_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
+    /// called when data is acked, direction is of the ack packet, not the stream
+    fn ack_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
     /// called on FIN
     fn fin_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
     /// called on RST
