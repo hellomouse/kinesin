@@ -146,6 +146,7 @@ fn main() -> eyre::Result<()> {
                             Linktype::RAW => ParseLayer::IP,
                             Linktype::IPV4 => ParseLayer::IP,
                             Linktype::IPV6 => ParseLayer::IP,
+                            Linktype::NULL => ParseLayer::BsdLoopback,
                             _ => eyre::bail!("pcap header: unknown link type {:?}", hdr.network),
                         };
                         parser.layer = layer;

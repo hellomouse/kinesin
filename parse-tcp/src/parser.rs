@@ -24,6 +24,8 @@ impl Parser {
         let parse_result = match self.layer {
             ParseLayer::Link => SlicedPacket::from_ethernet(data),
             ParseLayer::IP => SlicedPacket::from_ip(data),
+            // BSD loopback has 4 byte header before IP, remove it
+            ParseLayer::BsdLoopback => SlicedPacket::from_ip(&data[4..]),
         };
         // ignore errors
         let Ok(parsed) = parse_result else {
@@ -105,4 +107,6 @@ pub enum ParseLayer {
     Link,
     /// IP layer (layer 3)
     IP,
+    /// BSD loopback (linktype 0/NULL)
+    BsdLoopback,
 }
