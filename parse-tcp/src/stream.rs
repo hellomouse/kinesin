@@ -165,7 +165,11 @@ impl Stream {
         } else {
             // at low section of window (sequence number has rolled over)
             let bytes_from_start = number.wrapping_sub(self.seq_window_start);
-            let mut rolling_over = true;
+            // offset object to use for rolled over values
+            let rollover_offset = match self.seq_offset {
+                SeqOffset::Initial(isn) => SeqOffset::Subsequent((1 << 32) - isn as u64),
+                SeqOffset::Subsequent(off) => SeqOffset::Subsequent(off + (1 << 32)),
+            };
             if bytes_from_start > SEQ_WINDOW_ADVANCE_THRESHOLD {
                 // advance window
                 let old_start = self.seq_window_start;
@@ -179,20 +183,12 @@ impl Stream {
                 );
 
                 if self.seq_window_start < self.seq_window_end {
-                    // update seq_offset after wraparound
-                    self.seq_offset = match self.seq_offset {
-                        SeqOffset::Initial(isn) => SeqOffset::Subsequent((1 << 32) - isn as u64),
-                        SeqOffset::Subsequent(off) => SeqOffset::Subsequent(off + (1 << 32)),
-                    };
+                    // seq_window rollover done, update seq_offset
+                    self.seq_offset = rollover_offset.clone();
                     trace!("seq_window rollover over, advance seq_offset");
-                    rolling_over = false;
                 }
             }
-            let mut offset = self.seq_offset.compute_absolute(number);
-            if rolling_over {
-                // if we already added to seq_offset, don't add again
-                offset += 1 << 32;
-            }
+            let offset = rollover_offset.compute_absolute(number);
             Some(offset)
         }
     }
@@ -515,6 +511,7 @@ impl PartialEq for SegmentInfo {
 impl Eq for SegmentInfo {}
 
 /// represents offset from packet sequence number to absolute offset
+#[derive(Clone)]
 pub enum SeqOffset {
     /// negative offset due to initial sequence number
     Initial(u32),

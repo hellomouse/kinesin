@@ -13,6 +13,7 @@ use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::{LegacyPcapReader, Linktype, PcapBlockOwned, PcapError};
 use tracing::info;
 
+/*
 fn dump_as_ascii(buf: &[u8]) {
     let mut writer = BufWriter::new(std::io::stdout());
     buf
@@ -22,6 +23,19 @@ fn dump_as_ascii(buf: &[u8]) {
         .for_each(|b| {
             writer.write_all(&[b]).expect("failed write");
         });
+    let _ = writer.write_all(b"\n");
+}
+*/
+
+fn dump_as_readable_ascii(buf: &[u8]) {
+    let mut writer = BufWriter::new(std::io::stdout());
+    buf.iter().copied().map(|v| {
+        if (b' '..=b'~').contains(&v) || v == b'\n' {
+            v
+        } else {
+            b'.'
+        }
+    }).for_each(|v| writer.write_all(&[v]).expect("failed write"));
     let _ = writer.write_all(b"\n");
 }
 
@@ -80,7 +94,7 @@ impl DumpHandler {
             }
         }
         info!("data (length {})", self.buf.len());
-        dump_as_ascii(&self.buf);
+        dump_as_readable_ascii(&self.buf);
     }
 }
 
