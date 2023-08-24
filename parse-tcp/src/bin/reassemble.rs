@@ -19,7 +19,7 @@ const PCAP_READER_BUFFER_SIZE: usize = 4 << 20; // 4 MB
 #[command(about, version)]
 struct Args {
     /// Input capture file, supports pcap only (not yet pcapng)
-    #[arg(short = 'f', long)]
+    #[arg(index = 1)]
     input: PathBuf,
     /// Directory to write stream data. If not provided, will dump to stdout.
     #[arg(short = 'd', long)]
