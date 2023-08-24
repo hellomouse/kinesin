@@ -109,6 +109,9 @@ where
     fn rst_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
     /// ACK for FIN received for stream
     fn stream_end(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
+    /// connection fatally desynchronized, `direction` is our best guess for the
+    /// direction of the packet which caused the desync
+    fn connection_desync(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
     /// called when the connection is removed from the hashtable
     fn will_retire(&mut self, _connection: &mut Connection<Self>) {}
 }

@@ -38,6 +38,8 @@ pub enum ConnectionState {
     },
     /// connection closed
     Closed,
+    /// connection fatally desynchronized
+    Desync,
 }
 
 /// packet direction
@@ -130,8 +132,8 @@ impl<H: ConnectionHandler> Connection<H> {
 
     /// handle a packet supposedly belonging to this connection
     #[tracing::instrument(name = "conn", skip_all, fields(id = %self.uuid))]
-    pub fn handle_packet(&mut self, meta: TcpMeta, data: &[u8], extra: PacketExtra) -> bool {
-        debug_assert_ne!(self.forward_flow.compare_tcp_meta(&meta), FlowCompare::None);
+    pub fn handle_packet(&mut self, meta: &TcpMeta, data: &[u8], extra: &PacketExtra) -> bool {
+        debug_assert_ne!(self.forward_flow.compare_tcp_meta(meta), FlowCompare::None);
         if meta.flags.syn {
             self.handle_syn(meta)
         } else if meta.flags.rst {
@@ -143,7 +145,7 @@ impl<H: ConnectionHandler> Connection<H> {
     }
 
     /// handle packet with SYN flag
-    pub fn handle_syn(&mut self, meta: TcpMeta) -> bool {
+    pub fn handle_syn(&mut self, meta: &TcpMeta) -> bool {
         debug_assert!(meta.flags.syn);
         if meta.flags.rst {
             // probably shouldn't happen
@@ -168,7 +170,7 @@ impl<H: ConnectionHandler> Connection<H> {
                         trace!("got window scale (SYN/ACK): {}", scale);
                         self.reverse_stream.set_window_scale(scale);
                     }
-                    if self.forward_flow.compare_tcp_meta(&meta) == FlowCompare::Forward {
+                    if self.forward_flow.compare_tcp_meta(meta) == FlowCompare::Forward {
                         // SYN/ACK is expected server -> client
                         trace!("handle_syn: got SYN/ACK, reversing forward_flow");
                         self.forward_flow.reverse();
@@ -187,7 +189,7 @@ impl<H: ConnectionHandler> Connection<H> {
                         trace!("got window scale (first SYN): {}", scale);
                         self.forward_stream.set_window_scale(scale);
                     }
-                    if self.forward_flow.compare_tcp_meta(&meta) == FlowCompare::Reverse {
+                    if self.forward_flow.compare_tcp_meta(meta) == FlowCompare::Reverse {
                         // SYN is expected client -> server
                         self.forward_flow.reverse();
                     }
@@ -198,7 +200,7 @@ impl<H: ConnectionHandler> Connection<H> {
                 // expect: SYN/ACK
                 if meta.flags.ack {
                     // SYN/ACK received
-                    if self.forward_flow.compare_tcp_meta(&meta) != FlowCompare::Reverse {
+                    if self.forward_flow.compare_tcp_meta(meta) != FlowCompare::Reverse {
                         // wrong direction?
                         trace!("handle_syn: dropped SYN/ACK in wrong direction (state SynSent)");
                         false
@@ -239,6 +241,13 @@ impl<H: ConnectionHandler> Connection<H> {
             ConnectionState::Established { .. } => {
                 // ???
                 warn!("received SYN for established connection?");
+                self.conn_state = ConnectionState::Desync;
+                let dir = self
+                    .forward_flow
+                    .compare_tcp_meta(meta)
+                    .to_direction()
+                    .expect("connection got unrelated packet");
+                self.call_handler(|conn, h| h.connection_desync(conn, dir));
                 false
             }
             _ => false, // ignore
@@ -246,9 +255,9 @@ impl<H: ConnectionHandler> Connection<H> {
     }
 
     /// handle packet with RST flag
-    pub fn handle_rst(&mut self, meta: TcpMeta) -> bool {
+    pub fn handle_rst(&mut self, meta: &TcpMeta) -> bool {
         debug_assert!(meta.flags.rst);
-        match self.forward_flow.compare_tcp_meta(&meta) {
+        match self.forward_flow.compare_tcp_meta(meta) {
             FlowCompare::Forward => {
                 debug!("received reset in forward direction");
                 self.forward_stream.had_reset = true;
@@ -266,12 +275,12 @@ impl<H: ConnectionHandler> Connection<H> {
     }
 
     /// handle data packet received before SYN/ACK
-    pub fn handle_data_hs1(&mut self, meta: TcpMeta, data: &[u8], extra: PacketExtra) -> bool {
+    pub fn handle_data_hs1(&mut self, meta: &TcpMeta, data: &[u8], extra: &PacketExtra) -> bool {
         trace!(
             "handle_data_hs1: received data before handshake completion, {:?} -> Established",
             self.conn_state
         );
-        let (forward_isn, reverse_isn) = match self.forward_flow.compare_tcp_meta(&meta) {
+        let (forward_isn, reverse_isn) = match self.forward_flow.compare_tcp_meta(meta) {
             FlowCompare::Forward => (meta.seq_number, meta.ack_number),
             FlowCompare::Reverse => (meta.ack_number, meta.seq_number),
             _ => unreachable!("got unrelated flow"),
@@ -297,7 +306,7 @@ impl<H: ConnectionHandler> Connection<H> {
     }
 
     /// handle data packet received after SYN/ACK
-    pub fn handle_data_hs2(&mut self, meta: TcpMeta, data: &[u8], extra: PacketExtra) -> bool {
+    pub fn handle_data_hs2(&mut self, meta: &TcpMeta, data: &[u8], extra: &PacketExtra) -> bool {
         let ConnectionState::SynReceived {
             seq_no,
             ack_no,
@@ -309,7 +318,7 @@ impl<H: ConnectionHandler> Connection<H> {
         };
 
         let mut reverse_window: u16 = 0;
-        let (forward_isn, reverse_isn) = match self.forward_flow.compare_tcp_meta(&meta) {
+        let (forward_isn, reverse_isn) = match self.forward_flow.compare_tcp_meta(meta) {
             FlowCompare::Forward => {
                 if meta.flags.ack && meta.seq_number == ack_no && meta.ack_number == seq_no + 1 {
                     if syn_seen {
@@ -353,12 +362,12 @@ impl<H: ConnectionHandler> Connection<H> {
     /// handle data after handshake is completed
     pub fn handle_data_established(
         &mut self,
-        meta: TcpMeta,
+        meta: &TcpMeta,
         data: &[u8],
-        extra: PacketExtra,
+        extra: &PacketExtra,
     ) -> bool {
         let dir;
-        let (data_stream, ack_stream) = match self.forward_flow.compare_tcp_meta(&meta) {
+        let (data_stream, ack_stream) = match self.forward_flow.compare_tcp_meta(meta) {
             FlowCompare::Forward => {
                 dir = Direction::Forward;
                 (&mut self.forward_stream, &mut self.reverse_stream)
@@ -433,7 +442,7 @@ impl<H: ConnectionHandler> Connection<H> {
     }
 
     /// handle ordinary data packet
-    pub fn handle_data(&mut self, meta: TcpMeta, data: &[u8], extra: PacketExtra) -> bool {
+    pub fn handle_data(&mut self, meta: &TcpMeta, data: &[u8], extra: &PacketExtra) -> bool {
         match self.conn_state {
             ConnectionState::None | ConnectionState::SynSent { .. } => {
                 self.handle_data_hs1(meta, data, extra)
@@ -545,23 +554,23 @@ mod test {
         };
 
         let mut conn: Connection<TestHandler> = Connection::new((&hs1).into(), ()).unwrap();
-        assert!(conn.handle_packet(hs1.clone(), &[], PacketExtra::None));
+        assert!(conn.handle_packet(&hs1, &[], &PacketExtra::None));
         let mut hs2 = swap_meta(&hs1);
         hs2.seq_number = 315848;
         hs2.ack_number += 1;
         hs2.flags.ack = true;
-        assert!(conn.handle_packet(hs2.clone(), &[], PacketExtra::None));
+        assert!(conn.handle_packet(&hs2, &[], &PacketExtra::None));
         let mut hs3 = swap_meta(&hs2);
         hs3.ack_number += 1;
         hs3.flags.syn = false;
-        assert!(conn.handle_packet(hs3.clone(), &[], PacketExtra::None));
+        assert!(conn.handle_packet(&hs3, &[], &PacketExtra::None));
 
         let mut hs_done = HANDSHAKE_DONE.lock();
         assert!(*hs_done);
         *hs_done = false;
 
         let data1 = hs3.clone();
-        assert!(conn.handle_packet(data1.clone(), b"test", PacketExtra::None));
+        assert!(conn.handle_packet(&data1, b"test", &PacketExtra::None));
         assert_eq!(conn.forward_stream.readable_buffered_length(), 4);
     }
 }

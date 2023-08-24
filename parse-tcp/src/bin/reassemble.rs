@@ -51,7 +51,7 @@ fn dump_to_stdout(file: File) -> eyre::Result<()> {
     let mut flowtable: FlowTable<DumpHandler> = FlowTable::new(());
 
     parse_packets(file, |meta, data, extra| {
-        let _ = flowtable.handle_packet(meta, data, extra);
+        let _ = flowtable.handle_packet(&meta, data, &extra);
         Ok(())
     })?;
 
@@ -65,7 +65,7 @@ fn write_to_dir(file: File, out_dir: PathBuf) -> eyre::Result<()> {
     let mut flowtable: FlowTable<DirectoryOutputHandler> = FlowTable::new(shared_info.clone());
 
     parse_packets(file, |meta, data: &[u8], extra| {
-        flowtable.handle_packet(meta, data, extra)?;
+        flowtable.handle_packet(&meta, data, &extra)?;
         if let Ok(e) = errors_rx.try_recv() {
             return Err(e);
         }

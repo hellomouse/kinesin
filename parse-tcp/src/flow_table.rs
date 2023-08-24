@@ -12,6 +12,7 @@ use crate::connection::ConnectionState;
 use crate::ConnectionHandler;
 use crate::PacketExtra;
 use crate::TcpMeta;
+use crate::connection::Direction;
 
 #[derive(Debug, Clone)]
 pub struct Flow {
@@ -99,6 +100,17 @@ pub enum FlowCompare {
     None,
 }
 
+impl FlowCompare {
+    /// get direction from compare, or None
+    pub fn to_direction(&self) -> Option<Direction> {
+        match self {
+            FlowCompare::Forward => Some(Direction::Forward),
+            FlowCompare::Reverse => Some(Direction::Reverse),
+            FlowCompare::None => None,
+        }
+    }
+}
+
 impl PartialEq for Flow {
     fn eq(&self, other: &Self) -> bool {
         self.compare(other) != FlowCompare::None
@@ -138,6 +150,18 @@ pub struct FlowTable<H: ConnectionHandler> {
     pub handler_init_data: H::InitialData,
 }
 
+/// result of FlowTable::handle_packet_direct
+pub enum HandlePacketResult {
+    /// packet successfully processed
+    Ok,
+    /// packet ignored, possibly because it was a duplicate
+    Dropped,
+    /// flow not found in hash table, data returned
+    NotFound,
+    /// connection fatally desynchronized, data returned
+    Desync,
+}
+
 impl<H: ConnectionHandler> FlowTable<H> {
     /// create new instance
     pub fn new(handler_init_data: H::InitialData) -> Self {
@@ -151,18 +175,33 @@ impl<H: ConnectionHandler> FlowTable<H> {
     /// handle a packet, creating a flow if necessary
     pub fn handle_packet(
         &mut self,
-        meta: TcpMeta,
+        meta: &TcpMeta,
         data: &[u8],
-        extra: PacketExtra,
+        extra: &PacketExtra,
     ) -> Result<bool, H::ConstructError> {
         match self.handle_packet_direct(meta, data, extra) {
-            Ok(b) => Ok(b),
-            Err((meta, extra)) => {
-                self.create_flow((&meta).into(), self.handler_init_data.clone())?;
-                Ok(self
-                    .handle_packet_direct(meta, data, extra)
-                    .map_err(|_| ())
-                    .expect("no flow after created flow"))
+            HandlePacketResult::Ok => Ok(true),
+            HandlePacketResult::Dropped => Ok(false),
+            HandlePacketResult::NotFound => {
+                // create the flow, then process again
+                self.create_flow(meta.into(), self.handler_init_data.clone())?;
+                match self.handle_packet_direct(meta, data, extra) {
+                    HandlePacketResult::Ok => Ok(true),
+                    HandlePacketResult::Dropped => Ok(false),
+                    _ => unreachable!("result not possible")
+                }
+            },
+            HandlePacketResult::Desync => {
+                // remove flow, then recreate and try again
+                debug!("handle_packet: got desync, recreating flow");
+                let flow: Flow = meta.into();
+                self.retire_flow(flow.clone());
+                self.create_flow(flow, self.handler_init_data.clone())?;
+                match self.handle_packet_direct(meta, data, extra) {
+                    HandlePacketResult::Ok => Ok(true),
+                    HandlePacketResult::Dropped => Ok(false),
+                    _ => unreachable!("result not possible")
+                }
             }
         }
     }
@@ -170,22 +209,30 @@ impl<H: ConnectionHandler> FlowTable<H> {
     /// handle a packet, return Err if flow does not exist (and return args)
     pub fn handle_packet_direct(
         &mut self,
-        meta: TcpMeta,
+        meta: &TcpMeta,
         data: &[u8],
-        extra: PacketExtra,
-    ) -> Result<bool, (TcpMeta, PacketExtra)> {
-        let flow = (&meta).into();
+        extra: &PacketExtra,
+    ) -> HandlePacketResult {
+        let flow = meta.into();
         let did_something;
         match self.map.get_mut(&flow) {
             Some(conn) => {
                 did_something = conn.handle_packet(meta, data, extra);
-                if conn.conn_state == ConnectionState::Closed {
+                match conn.conn_state {
                     // remove flow if connection is no more
-                    self.retire_flow(flow);
+                    ConnectionState::Closed => self.retire_flow(flow),
+                    ConnectionState::Desync => {
+                        return HandlePacketResult::Desync;
+                    }
+                    _ => {}
                 }
-                Ok(did_something)
+                if did_something {
+                    HandlePacketResult::Ok
+                } else {
+                    HandlePacketResult::Dropped
+                }
             }
-            None => Err((meta, extra)),
+            None => HandlePacketResult::NotFound,
         }
     }
 
