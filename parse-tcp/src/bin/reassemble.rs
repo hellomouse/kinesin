@@ -13,9 +13,11 @@ use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::{LegacyPcapReader, Linktype, PcapBlockOwned, PcapError};
 use tracing::info;
 
+/// Reassemble TCP streams in a packet capture
 #[derive(ClapParser, Debug)]
+#[command(about, version)]
 struct Args {
-    /// Input capture file
+    /// Input capture file, supports pcap only (not yet pcapng)
     #[arg(short = 'f', long)]
     input: PathBuf,
     /// Directory to write stream data. If not provided, will dump to stdout.
