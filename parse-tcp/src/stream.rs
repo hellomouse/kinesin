@@ -350,7 +350,7 @@ impl Stream {
 
         if let Some(final_seq) = self.state.final_offset {
             // check if final data packet was acked
-            if self.highest_acked >= final_seq {
+            if self.highest_acked > final_seq {
                 self.has_ended = true;
                 trace!("handle_ack_packet: fin (offset {final_seq}) got ack (offset {offset})");
             }
