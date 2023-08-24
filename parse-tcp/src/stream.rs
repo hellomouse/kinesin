@@ -551,10 +551,16 @@ pub enum SegmentType {
 impl Ord for SegmentInfo {
     /// reversed compare of offset (we want pop to get the smallest offset)
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
         match self.offset.cmp(&other.offset) {
-            std::cmp::Ordering::Less => std::cmp::Ordering::Greater,
-            std::cmp::Ordering::Equal => std::cmp::Ordering::Equal,
-            std::cmp::Ordering::Greater => std::cmp::Ordering::Less,
+            Ordering::Less => Ordering::Greater,
+            Ordering::Equal => match self.reverse_acked.cmp(&other.reverse_acked) {
+                // sort by reverse_acked if equal
+                Ordering::Less => Ordering::Greater,
+                Ordering::Equal => Ordering::Equal,
+                Ordering::Greater => Ordering::Less,
+            },
+            Ordering::Greater => Ordering::Less,
         }
     }
 }
@@ -567,7 +573,7 @@ impl PartialOrd for SegmentInfo {
 
 impl PartialEq for SegmentInfo {
     fn eq(&self, other: &Self) -> bool {
-        self.offset == other.offset
+        self.offset == other.offset && self.reverse_acked == other.reverse_acked
     }
 }
 
