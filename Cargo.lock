@@ -526,9 +526,11 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "color-eyre",
+ "crossbeam-channel",
  "etherparse",
  "eyre",
  "kinesin-rdt",
+ "libc",
  "parking_lot",
  "pcap-parser",
  "serde",
@@ -543,8 +545,7 @@ dependencies = [
 [[package]]
 name = "pcap-parser"
 version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b79dfb40aef938ed2082c9ae9443f4eba21b79c1a9d6cfa071f5c2bd8d829491"
+source = "git+https://github.com/iczero/pcap-parser?branch=unexpected-eof#472b779702868c82233852a703af4235acaaaa5f"
 dependencies = [
  "circular",
  "nom",

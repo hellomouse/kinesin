@@ -203,29 +203,46 @@ pub struct DirectoryOutputSharedInfoInner {
     pub conn_info_file: Mutex<File>,
 }
 
-impl DirectoryOutputSharedInfoInner {
+#[derive(Clone)]
+pub struct DirectoryOutputSharedInfo {
+    pub inner: Arc<DirectoryOutputSharedInfoInner>,
+    pub errors: crossbeam_channel::Sender<eyre::Report>,
+}
+
+pub type ErrorReceiver = crossbeam_channel::Receiver<eyre::Report>;
+impl DirectoryOutputSharedInfo {
     /// create with output path
-    pub fn new(base_dir: PathBuf) -> std::io::Result<Arc<Self>> {
+    pub fn new(base_dir: PathBuf) -> std::io::Result<(Self, ErrorReceiver)> {
         let mut conn_info_file = File::create(base_dir.join("connections.json"))?;
         conn_info_file.write_all(b"[\n")?;
-        Ok(Arc::new(DirectoryOutputSharedInfoInner {
-            base_dir,
-            conn_info_file: Mutex::new(conn_info_file),
-        }))
+        let (error_tx, error_rx) = crossbeam_channel::unbounded();
+        Ok((
+            DirectoryOutputSharedInfo {
+                inner: Arc::new(DirectoryOutputSharedInfoInner {
+                    base_dir,
+                    conn_info_file: Mutex::new(conn_info_file),
+                }),
+                errors: error_tx,
+            },
+            error_rx,
+        ))
     }
 
     /// write connection info
-    pub fn record_conn_info(self: &Arc<Self>, uuid: Uuid, flow: &Flow) -> std::io::Result<()> {
+    pub fn record_conn_info(&self, uuid: Uuid, flow: &Flow) -> std::io::Result<()> {
         let mut serialized = serde_json::to_string(&ConnInfo::new(uuid, flow))
             .expect("failed to serialize ConnInfo");
         serialized += ",\n";
-        let mut file = self.conn_info_file.lock();
+        let mut file = self.inner.conn_info_file.lock();
         file.write_all(serialized.as_bytes())
     }
 
     /// close connection info file
     pub fn close(self) -> std::io::Result<()> {
-        let mut conn_info_file = self.conn_info_file.into_inner();
+        let mut conn_info_file = Arc::into_inner(self.inner)
+            .unwrap()
+            .conn_info_file
+            .into_inner();
         let current_pos = conn_info_file.stream_position()?;
         if current_pos > 2 {
             // overwrite trailing comma and close array
@@ -237,9 +254,21 @@ impl DirectoryOutputSharedInfoInner {
         }
         Ok(())
     }
-}
 
-type DirectoryOutputSharedInfo = Arc<DirectoryOutputSharedInfoInner>;
+    /// run a closure, sending errors through the error channel
+    pub fn capture_errors<T>(
+        &self,
+        func: impl FnOnce() -> eyre::Result<T>,
+    ) -> Option<T> {
+        match func() {
+            Ok(r) => Some(r),
+            Err(e) => {
+                self.errors.send(e).expect("could not forward error");
+                None
+            }
+        }
+    }
+}
 
 #[derive(Serialize)]
 #[serde(tag = "type")]
@@ -303,17 +332,23 @@ impl From<&SegmentInfo> for SerializedSegment {
     }
 }
 
+/// stream files for DirectoryOutputHandler
+pub struct DirectoryOutputHandlerFiles {
+    pub forward_data: File,
+    pub forward_segments: File,
+    pub reverse_data: File,
+    pub reverse_segments: File,
+}
+
 /// ConnectionHandler to write data to a directory
 pub struct DirectoryOutputHandler {
     pub shared_info: DirectoryOutputSharedInfo,
     pub id: Uuid,
     pub gaps: Vec<Range<u64>>,
     pub segments: Vec<SegmentInfo>,
-
-    pub forward_data: File,
-    pub forward_segments: File,
-    pub reverse_data: File,
-    pub reverse_segments: File,
+    /// whether we received the handshake_done event
+    pub got_handshake_done: bool,
+    pub files: Option<DirectoryOutputHandlerFiles>,
 }
 
 impl DirectoryOutputHandler {
@@ -326,14 +361,15 @@ impl DirectoryOutputHandler {
         self.gaps.clear();
         self.segments.clear();
 
+        let files = self.files.as_mut().expect("files not available!");
         let (data_file, mut segments_file) = match direction {
             Direction::Forward => (
-                &mut self.forward_data,
-                BufWriter::new(&mut self.forward_segments),
+                &mut files.forward_data,
+                BufWriter::new(&mut files.forward_segments),
             ),
             Direction::Reverse => (
-                &mut self.reverse_data,
-                BufWriter::new(&mut self.reverse_segments),
+                &mut files.reverse_data,
+                BufWriter::new(&mut files.reverse_segments),
             ),
         };
 
@@ -435,35 +471,46 @@ impl ConnectionHandler for DirectoryOutputHandler {
         shared_info: Self::InitialData,
         connection: &mut Connection<Self>,
     ) -> eyre::Result<Self> {
-        let id = connection.uuid;
-        let base_dir = &shared_info.base_dir;
-        let forward_data = File::create(base_dir.join(format!("{id}.f.data")))
-            .wrap_err("creating forward data file")?;
-        let forward_segments = File::create(base_dir.join(format!("{id}.f.jsonl")))
-            .wrap_err("creating forward segments file")?;
-        let reverse_data = File::create(base_dir.join(format!("{id}.r.data")))
-            .wrap_err("creating reverse data file")?;
-        let reverse_segments = File::create(base_dir.join(format!("{id}.r.jsonl")))
-            .wrap_err("creating reverse segments file")?;
-
         Ok(DirectoryOutputHandler {
             shared_info,
-            id,
+            id: connection.uuid,
             gaps: Vec::new(),
             segments: Vec::new(),
-            forward_data,
-            forward_segments,
-            reverse_data,
-            reverse_segments,
+            got_handshake_done: false,
+            files: None,
         })
     }
 
     fn handshake_done(&mut self, connection: &mut Connection<Self>) {
+        if !self.got_handshake_done {
+            self.got_handshake_done = true;
+        }
         log_error!(
             self.shared_info
                 .record_conn_info(connection.uuid, &connection.forward_flow),
             "failed to write connection info"
         );
+
+        self.shared_info.capture_errors(|| {
+            let id = connection.uuid;
+            let base_dir = &self.shared_info.inner.base_dir;
+            trace!("creating files for connection {id}");
+            let forward_data = File::create(base_dir.join(format!("{id}.f.data")))
+                .wrap_err("creating forward data file")?;
+            let forward_segments = File::create(base_dir.join(format!("{id}.f.jsonl")))
+                .wrap_err("creating forward segments file")?;
+            let reverse_data = File::create(base_dir.join(format!("{id}.r.data")))
+                .wrap_err("creating reverse data file")?;
+            let reverse_segments = File::create(base_dir.join(format!("{id}.r.jsonl")))
+                .wrap_err("creating reverse segments file")?;
+            self.files = Some(DirectoryOutputHandlerFiles {
+                forward_data,
+                forward_segments,
+                reverse_data,
+                reverse_segments,
+            });
+            Ok(())
+        });
     }
 
     fn data_received(&mut self, connection: &mut Connection<Self>, direction: Direction) {
@@ -483,6 +530,10 @@ impl ConnectionHandler for DirectoryOutputHandler {
     }
 
     fn will_retire(&mut self, connection: &mut Connection<Self>) {
+        if !self.got_handshake_done {
+            // nothing to write if no data
+            return;
+        }
         log_error!(
             self.write_remaining(connection, Direction::Forward),
             "failed to write stream data"

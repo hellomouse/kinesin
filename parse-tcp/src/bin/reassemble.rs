@@ -1,17 +1,18 @@
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use clap::Parser as ClapParser;
 use eyre::Context;
 use parse_tcp::flow_table::FlowTable;
-use parse_tcp::handler::{DirectoryOutputHandler, DirectoryOutputSharedInfoInner, DumpHandler};
+use parse_tcp::handler::{DirectoryOutputHandler, DirectoryOutputSharedInfo, DumpHandler};
 use parse_tcp::parser::{ParseLayer, TcpParser};
 use parse_tcp::{initialize_logging, PacketExtra, TcpMeta};
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::{LegacyPcapReader, Linktype, PcapBlockOwned, PcapError};
-use tracing::info;
+use tracing::{debug, error, info, warn};
+
+const PCAP_READER_BUFFER_SIZE: usize = 4 << 20; // 4 MB
 
 /// Reassemble TCP streams in a packet capture
 #[derive(ClapParser, Debug)]
@@ -31,6 +32,14 @@ fn main() -> eyre::Result<()> {
     let args = Args::parse();
     let file = File::open(args.input).wrap_err("cannot open file")?;
     if let Some(out_dir) = args.output_dir {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        unsafe {
+            info!("attempting to raise file limit");
+            match i_want_more_files(1 << 20) {
+                Ok(n) => info!("raised file limit to {n} files"),
+                Err(e) => warn!("failed to raise file limit: {e:?}"),
+            }
+        }
         write_to_dir(file, out_dir)?;
     } else {
         dump_to_stdout(file)?;
@@ -51,17 +60,21 @@ fn dump_to_stdout(file: File) -> eyre::Result<()> {
 }
 
 fn write_to_dir(file: File, out_dir: PathBuf) -> eyre::Result<()> {
-    let shared_info = DirectoryOutputSharedInfoInner::new(out_dir)?;
+    let (shared_info, errors_rx) =
+        DirectoryOutputSharedInfo::new(out_dir).wrap_err("writing connections information file")?;
     let mut flowtable: FlowTable<DirectoryOutputHandler> = FlowTable::new(shared_info.clone());
 
-    parse_packets(file, |meta, data, extra| {
-        let _ = flowtable.handle_packet(meta, data, extra);
+    parse_packets(file, |meta, data: &[u8], extra| {
+        flowtable.handle_packet(meta, data, extra)?;
+        if let Ok(e) = errors_rx.try_recv() {
+            return Err(e);
+        }
         Ok(())
     })?;
 
     flowtable.close();
     drop(flowtable);
-    Arc::into_inner(shared_info).unwrap().close()?;
+    shared_info.close()?;
     Ok(())
 }
 
@@ -107,18 +120,32 @@ fn read_pcap_legacy(
     reader: impl Read,
     mut handler: impl FnMut(PcapBlockOwned<'_>) -> eyre::Result<()>,
 ) -> eyre::Result<()> {
-    let mut pcap_reader =
-        LegacyPcapReader::new(65536, reader).wrap_err("failed to create LegacyPcapReader")?;
+    let mut pcap_reader = LegacyPcapReader::new(PCAP_READER_BUFFER_SIZE, reader)
+        .wrap_err("failed to create LegacyPcapReader")?;
+    let mut did_refill = false;
     loop {
         match pcap_reader.next() {
             Ok((offset, block)) => {
+                did_refill = false;
                 handler(block)?;
                 pcap_reader.consume(offset);
             }
-            Err(PcapError::Eof) => break,
+            Err(PcapError::Eof) => {
+                debug!("eof");
+                break;
+            }
+            Err(PcapError::UnexpectedEof) => {
+                error!("unexpected eof while reading pcap");
+                break;
+            }
             Err(PcapError::Incomplete) => {
+                if did_refill {
+                    eyre::bail!("infinite loop in pcap_reader.refill()");
+                }
                 match pcap_reader.refill() {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        did_refill = true;
+                    }
                     // only valid result is ReadError
                     Err(PcapError::ReadError) => {
                         eyre::bail!("read error occured while reading pcap");
@@ -138,4 +165,32 @@ fn read_pcap_legacy(
         }
     }
     Ok(())
+}
+
+/// raise RLIMIT_NOFILE so we can open more files
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+unsafe fn i_want_more_files(more_files: u64) -> eyre::Result<u64> {
+    macro_rules! raise_os_error {
+        ($what:expr) => {
+            let err = ::std::io::Error::last_os_error();
+            return Err(::eyre::eyre!(err).wrap_err($what));
+        };
+    }
+    let mut current_limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    let ret = libc::getrlimit(libc::RLIMIT_NOFILE, &mut current_limit);
+    if ret < 0 {
+        raise_os_error!("getrlimit(RLIMIT_NOFILE)");
+    }
+    let new_limit = libc::rlimit {
+        rlim_cur: current_limit.rlim_max.min(more_files),
+        rlim_max: current_limit.rlim_max,
+    };
+    let ret = libc::setrlimit(libc::RLIMIT_NOFILE, &new_limit);
+    if ret < 0 {
+        raise_os_error!("setrlimit(RLIMIT_NOFILE");
+    }
+    Ok(new_limit.rlim_cur)
 }
