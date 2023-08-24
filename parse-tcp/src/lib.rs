@@ -2,9 +2,11 @@ use std::fmt::Debug;
 use std::net::IpAddr;
 
 use connection::{Connection, Direction};
+use serde::Serialize;
 
 pub mod connection;
 pub mod flow_table;
+pub mod handler;
 pub mod parser;
 pub mod stream;
 
@@ -88,8 +90,13 @@ where
 {
     /// initial data provided to new
     type InitialData: Clone;
+    /// error type raised from new
+    type ConstructError;
     /// construct handler object
-    fn new(init_data: Self::InitialData, connection: &mut Connection<Self>) -> Self;
+    fn new(
+        init_data: Self::InitialData,
+        connection: &mut Connection<Self>,
+    ) -> Result<Self, Self::ConstructError>;
     /// called on handshake finish (or incomplete handshake)
     fn handshake_done(&mut self, _connection: &mut Connection<Self>) {}
     /// called on data received
@@ -107,7 +114,8 @@ where
 }
 
 /// extra information that may be associated with the packet
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
 pub enum PacketExtra {
     None,
     LegacyPcap {

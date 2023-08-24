@@ -486,25 +486,25 @@ impl Stream {
     }
 
     /// read state until offset
-    pub fn read_next(
+    pub fn read_next<T>(
         &mut self,
         end_offset: u64,
         in_segments: &mut Vec<SegmentInfo>,
         in_gaps: &mut Vec<Range<u64>>,
-        read_fn: impl FnOnce(RingBufSlice<'_, u8>),
-    ) -> bool {
+        read_fn: impl FnOnce(RingBufSlice<'_, u8>) -> T,
+    ) -> Option<T> {
         let start_offset = self.state.buffer_offset;
         if end_offset < start_offset {
             warn!("requested read of range that no longer exists");
-            return false;
+            return None;
         }
         if end_offset == start_offset {
             // don't return zero-length reads
-            return false;
+            return None;
         }
         if (end_offset - start_offset) as usize > self.state.buffer.len() {
             warn!("requested read of range past end of buffer");
-            return false;
+            return None;
         }
         self.read_segments_until(end_offset, in_segments);
         self.read_gaps(start_offset..end_offset, in_gaps);
@@ -514,10 +514,10 @@ impl Stream {
         let Some(slice) = self.state.read_segment(start_offset..end_offset) else {
             panic!("InboundStreamState says range is not available");
         };
-        read_fn(slice);
+        let ret = read_fn(slice);
         // advance backing buffer
         self.state.advance_buffer(end_offset);
-        true
+        Some(ret)
     }
 }
 
@@ -528,6 +528,7 @@ impl Default for Stream {
 }
 
 /// information on each segment received
+#[derive(Clone)]
 pub struct SegmentInfo {
     /// offset into stream of this segment
     pub offset: u64,
@@ -540,6 +541,7 @@ pub struct SegmentInfo {
 }
 
 /// type-specific information for each segment
+#[derive(Clone)]
 pub enum SegmentType {
     Data { len: usize, is_retransmit: bool },
     Ack { window: usize },

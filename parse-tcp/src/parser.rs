@@ -1,17 +1,18 @@
 use std::net::IpAddr;
 
-use etherparse::{InternetSlice, SlicedPacket, TransportSlice, TcpOptionElement};
+use etherparse::{InternetSlice, SlicedPacket, TcpOptionElement, TransportSlice};
 use tracing::{debug, trace};
 
-use crate::{TcpMeta, TcpFlags};
+use crate::{TcpFlags, TcpMeta};
 
-pub struct Parser {
+/// parses only TCP packets with etherparse
+pub struct TcpParser {
     pub layer: ParseLayer,
     pub failed_parse: usize,
     pub ignored: usize,
 }
 
-impl Parser {
+impl TcpParser {
     pub fn new() -> Self {
         Self {
             layer: ParseLayer::Link,
@@ -20,6 +21,7 @@ impl Parser {
         }
     }
 
+    /// parse tcp packets into TcpMeta and data
     pub fn parse_packet<'a>(&mut self, data: &'a [u8]) -> Option<(TcpMeta, &'a [u8])> {
         let parse_result = match self.layer {
             ParseLayer::Link => SlicedPacket::from_ethernet(data),
@@ -64,12 +66,12 @@ impl Parser {
             match opt {
                 Ok(TcpOptionElement::WindowScale(scale)) => {
                     option_window_scale = Some(scale);
-                },
+                }
                 Ok(TcpOptionElement::Timestamp(a, b)) => {
                     option_timestamp = Some((a, b));
                 }
                 // ignore all other options
-                _ => {},
+                _ => {}
             }
         }
 
@@ -95,7 +97,7 @@ impl Parser {
     }
 }
 
-impl Default for Parser {
+impl Default for TcpParser {
     fn default() -> Self {
         Self::new()
     }

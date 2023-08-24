@@ -101,7 +101,10 @@ pub enum HandlePacketResult {
 
 impl<H: ConnectionHandler> Connection<H> {
     /// create new connection with flow
-    pub fn new(forward_flow: Flow, handler_init_data: H::InitialData) -> Connection<H> {
+    pub fn new(
+        forward_flow: Flow,
+        handler_init_data: H::InitialData,
+    ) -> Result<Connection<H>, H::ConstructError> {
         let mut conn = Connection {
             uuid: Uuid::new_v4(),
             forward_flow,
@@ -112,9 +115,9 @@ impl<H: ConnectionHandler> Connection<H> {
             reverse_stream: Stream::new(),
             event_handler: None,
         };
-        let handler = H::new(handler_init_data, &mut conn);
+        let handler = H::new(handler_init_data, &mut conn)?;
         conn.event_handler = Some(handler);
-        conn
+        Ok(conn)
     }
 
     /// get stream in direction
@@ -461,6 +464,7 @@ impl<H: ConnectionHandler> Connection<H> {
 mod test {
     use crate::{initialize_logging, ConnectionHandler, PacketExtra, TcpFlags, TcpMeta};
     use parking_lot::Mutex;
+    use std::convert::Infallible;
     use std::mem;
 
     use super::{Connection, Direction};
@@ -490,8 +494,9 @@ mod test {
     struct TestHandler;
     impl ConnectionHandler for TestHandler {
         type InitialData = ();
-        fn new(_init: (), _conn: &mut Connection<Self>) -> Self {
-            TestHandler
+        type ConstructError = Infallible;
+        fn new(_init: (), _conn: &mut Connection<Self>) -> Result<Self, Infallible> {
+            Ok(TestHandler)
         }
         fn handshake_done(&mut self, _conn: &mut Connection<Self>) {
             let mut guard = HANDSHAKE_DONE.lock();
@@ -539,7 +544,7 @@ mod test {
             option_timestamp: None,
         };
 
-        let mut conn: Connection<TestHandler> = Connection::new(hs1.clone().into(), ());
+        let mut conn: Connection<TestHandler> = Connection::new((&hs1).into(), ()).unwrap();
         assert!(conn.handle_packet(hs1.clone(), &[], PacketExtra::None));
         let mut hs2 = swap_meta(&hs1);
         hs2.seq_number = 315848;

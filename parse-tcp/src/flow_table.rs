@@ -30,7 +30,7 @@ impl Flow {
 
     /// compare to TcpMeta
     pub fn compare_tcp_meta(&self, other: &TcpMeta) -> FlowCompare {
-        self.compare(&other.clone().into())
+        self.compare(&other.into())
     }
 
     /// compare to other
@@ -55,8 +55,8 @@ impl Flow {
     }
 }
 
-impl From<TcpMeta> for Flow {
-    fn from(value: TcpMeta) -> Self {
+impl From<&TcpMeta> for Flow {
+    fn from(value: &TcpMeta) -> Self {
         Flow {
             src_addr: value.src_addr,
             src_port: value.src_port,
@@ -148,9 +148,33 @@ impl<H: ConnectionHandler> FlowTable<H> {
         }
     }
 
-    /// handle a packet
-    pub fn handle_packet(&mut self, meta: TcpMeta, data: &[u8], extra: PacketExtra) -> bool {
-        let flow = meta.clone().into();
+    /// handle a packet, creating a flow if necessary
+    pub fn handle_packet(
+        &mut self,
+        meta: TcpMeta,
+        data: &[u8],
+        extra: PacketExtra,
+    ) -> Result<bool, H::ConstructError> {
+        match self.handle_packet_direct(meta, data, extra) {
+            Ok(b) => Ok(b),
+            Err((meta, extra)) => {
+                self.create_flow((&meta).into(), self.handler_init_data.clone())?;
+                Ok(self
+                    .handle_packet_direct(meta, data, extra)
+                    .map_err(|_| ())
+                    .expect("no flow after created flow"))
+            }
+        }
+    }
+
+    /// handle a packet, return Err if flow does not exist (and return args)
+    pub fn handle_packet_direct(
+        &mut self,
+        meta: TcpMeta,
+        data: &[u8],
+        extra: PacketExtra,
+    ) -> Result<bool, (TcpMeta, PacketExtra)> {
+        let flow = (&meta).into();
         let did_something;
         match self.map.get_mut(&flow) {
             Some(conn) => {
@@ -159,24 +183,30 @@ impl<H: ConnectionHandler> FlowTable<H> {
                     // remove flow if connection is no more
                     self.retire_flow(flow);
                 }
-                did_something
+                Ok(did_something)
             }
-            None => {
-                let conn = Connection::new(flow.clone(), self.handler_init_data.clone());
-                debug!("new flow: {} {flow}", conn.uuid);
-                self.map.insert(flow, conn);
-                self.handle_packet(meta, data, extra)
-            }
+            None => Err((meta, extra)),
         }
     }
 
-    pub fn retire_flow(&mut self, flow_id: Flow) {
-        let Some(mut conn) = self.map.remove(&flow_id) else {
-            warn!("retire_flow called on non-existent flow?: {flow_id}");
+    /// create flow
+    pub fn create_flow(
+        &mut self,
+        flow: Flow,
+        init_data: H::InitialData,
+    ) -> Result<Option<Connection<H>>, H::ConstructError> {
+        let conn = Connection::new(flow.clone(), init_data)?;
+        debug!("new flow: {} {flow}", conn.uuid);
+        Ok(self.map.insert(flow, conn))
+    }
+
+    pub fn retire_flow(&mut self, flow: Flow) {
+        let Some(mut conn) = self.map.remove(&flow) else {
+            warn!("retire_flow called on non-existent flow?: {flow}");
             return;
         };
 
-        debug!("remove flow: {} {flow_id}", conn.uuid);
+        debug!("remove flow: {} {flow}", conn.uuid);
         conn.will_retire();
         self.retired.push_back(conn);
     }
