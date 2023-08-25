@@ -17,6 +17,15 @@ use crate::flow_table::Flow;
 use crate::stream::{SegmentInfo, SegmentType};
 use crate::{ConnectionHandler, PacketExtra};
 
+/// threshold for buffered readable bytes before writing out
+const BUFFER_READABLE_THRESHOLD: usize = 64 << 10;
+/// threshold for buffered segment info objects before writing out
+const BUFFER_SEGMENTS_THRESHOLD: usize = 16 << 10;
+/// threshold for total buffered bytes before writing out
+const BUFFER_TOTAL_THRESHOLD: usize = 256 << 10;
+/// how many bytes to advance when hitting BUFFER_TOTAL_THRESHOLD
+const BUFFER_TOTAL_THRESHOLD_ADVANCE: usize = 64 << 10;
+
 pub fn dump_as_readable_ascii(buf: &[u8], newline: bool) {
     let mut writer = BufWriter::new(std::io::stdout());
     buf.iter()
@@ -62,6 +71,9 @@ impl DumpHandler {
                     info!("  type: fin");
                     info!("    end offset: {end_offset}");
                 }
+                SegmentType::Rst => {
+                    info!("  type: rst");
+                }
             }
         }
     }
@@ -70,7 +82,7 @@ impl DumpHandler {
         &mut self,
         connection: &mut Connection<Self>,
         direction: Direction,
-        dump_len: usize,
+        maybe_dump_len: Option<usize>,
     ) {
         self.gaps.clear();
         self.segments.clear();
@@ -82,6 +94,17 @@ impl DumpHandler {
         }
         let uuid = connection.uuid;
         let stream = connection.get_stream(direction);
+
+        let dump_len = if let Some(dump_len) = maybe_dump_len {
+            debug_assert!(dump_len > 0);
+            dump_len
+        } else {
+            // explicitly dump all remaining segments
+            trace!("dumping remaining segments for direction {direction}");
+            stream.read_segments_until(None, &mut self.segments);
+            // dump everything remaining
+            stream.total_buffered_length()
+        };
 
         let start_offset = stream.buffer_start();
         let end_offset = start_offset + dump_len as u64;
@@ -112,7 +135,6 @@ impl DumpHandler {
             dump_as_readable_ascii(&self.buf, true);
         } else {
             // read segments only
-            stream.read_segments_until(end_offset, &mut self.segments);
             info!("no new data, dumping segments only");
             self.dump_stream_segments();
         }
@@ -123,8 +145,7 @@ impl DumpHandler {
             "connection {} direction {direction} writing remaining segments",
             connection.uuid
         );
-        let remaining = connection.get_stream(direction).total_buffered_length();
-        self.dump_stream(connection, direction, remaining);
+        self.dump_stream(connection, direction, None);
     }
 }
 
@@ -155,19 +176,30 @@ impl ConnectionHandler for DumpHandler {
             let readable = rev_stream.readable_buffered_length();
             if readable > 0 {
                 trace!("reverse stream has data, will dump");
-                self.dump_stream(connection, direction.swap(), readable);
+                self.dump_stream(connection, direction.swap(), Some(readable));
             }
         }
 
         // dump forward stream if limits hit
         let fwd_stream = connection.get_stream(direction);
-        if fwd_readable_len > 64 << 10 || fwd_stream.segments_info.len() > 16 << 10 {
+        if fwd_readable_len > BUFFER_READABLE_THRESHOLD
+            || fwd_stream.segments_info.len() > BUFFER_SEGMENTS_THRESHOLD
+        {
             trace!("forward stream exceeded threshold, will dump");
-            self.dump_stream(connection, direction, fwd_readable_len);
-        } else if fwd_stream.total_buffered_length() > 256 << 10 {
+            self.dump_stream(connection, direction, Some(fwd_readable_len));
+        } else if fwd_stream.total_buffered_length() > BUFFER_TOTAL_THRESHOLD {
             trace!("forward stream exceeded total buffer size threshold, will dump");
-            self.dump_stream(connection, direction, 128 << 10);
+            self.dump_stream(connection, direction, Some(BUFFER_TOTAL_THRESHOLD_ADVANCE));
         }
+    }
+
+    fn rst_received(
+        &mut self,
+        connection: &mut Connection<Self>,
+        direction: Direction,
+        _extra: PacketExtra,
+    ) {
+        info!("{direction} ({}) received reset", connection.uuid);
     }
 
     fn will_retire(&mut self, connection: &mut Connection<Self>) {
@@ -256,10 +288,7 @@ impl DirectoryOutputSharedInfo {
     }
 
     /// run a closure, sending errors through the error channel
-    pub fn capture_errors<T>(
-        &self,
-        func: impl FnOnce() -> eyre::Result<T>,
-    ) -> Option<T> {
+    pub fn capture_errors<T>(&self, func: impl FnOnce() -> eyre::Result<T>) -> Option<T> {
         match func() {
             Ok(r) => Some(r),
             Err(e) => {
@@ -297,6 +326,13 @@ pub enum SerializedSegment {
         #[serde(flatten)]
         extra: PacketExtra,
     },
+    #[serde(rename = "rst")]
+    Rst {
+        offset: u64,
+        reverse_acked: u64,
+        #[serde(flatten)]
+        extra: PacketExtra,
+    },
     #[serde(rename = "gap")]
     Gap { offset: u64, len: u64 },
 }
@@ -328,6 +364,11 @@ impl From<&SegmentInfo> for SerializedSegment {
                 reverse_acked: info.reverse_acked,
                 extra: info.extra.clone(),
             },
+            SegmentType::Rst => Self::Rst {
+                offset: info.offset,
+                reverse_acked: info.reverse_acked,
+                extra: info.extra.clone(),
+            },
         }
     }
 }
@@ -356,7 +397,7 @@ impl DirectoryOutputHandler {
         &mut self,
         connection: &mut Connection<Self>,
         direction: Direction,
-        dump_len: usize,
+        maybe_dump_len: Option<usize>,
     ) -> std::io::Result<()> {
         self.gaps.clear();
         self.segments.clear();
@@ -374,6 +415,15 @@ impl DirectoryOutputHandler {
         };
 
         let stream = connection.get_stream(direction);
+        let dump_len = if let Some(dump_len) = maybe_dump_len {
+            debug_assert!(dump_len > 0);
+            dump_len
+        } else {
+            // explicitly dump all remaining segments
+            stream.read_segments_until(None, &mut self.segments);
+            // dump everything remaining
+            stream.total_buffered_length()
+        };
         if dump_len > 0 {
             trace!("write_stream_data: requesting {dump_len} bytes from stream for {direction}");
             let start_offset = stream.buffer_start();
@@ -390,12 +440,6 @@ impl DirectoryOutputHandler {
                     Result::<(), std::io::Error>::Ok(())
                 })
                 .expect("read_next cannot fulfill range")?;
-        } else if !stream.segments_info.is_empty() {
-            // only dump remaining segments
-            stream.read_segments_until(stream.buffer_start(), &mut self.segments);
-        } else {
-            // nothing to do
-            return Ok(());
         }
 
         // write gaps and segments in order
@@ -440,19 +484,6 @@ impl DirectoryOutputHandler {
         self.gaps.clear();
         self.segments.clear();
         Ok(())
-    }
-
-    pub fn write_remaining(
-        &mut self,
-        connection: &mut Connection<Self>,
-        direction: Direction,
-    ) -> std::io::Result<()> {
-        debug!(
-            "connection {} direction {direction} writing remaining segments",
-            connection.uuid
-        );
-        let remaining = connection.get_stream(direction).total_buffered_length();
-        self.write_stream_data(connection, direction, remaining)
     }
 }
 
@@ -516,14 +547,16 @@ impl ConnectionHandler for DirectoryOutputHandler {
     fn data_received(&mut self, connection: &mut Connection<Self>, direction: Direction) {
         let stream = connection.get_stream(direction);
         let readable_len = stream.readable_buffered_length();
-        if readable_len > 64 << 10 || stream.segments_info.len() > 16 << 10 {
+        if readable_len > BUFFER_READABLE_THRESHOLD
+            || stream.segments_info.len() > BUFFER_SEGMENTS_THRESHOLD
+        {
             log_error!(
-                self.write_stream_data(connection, direction, readable_len),
+                self.write_stream_data(connection, direction, Some(readable_len)),
                 "failed to write stream data"
             );
-        } else if stream.total_buffered_length() > 256 << 10 {
+        } else if stream.total_buffered_length() > BUFFER_TOTAL_THRESHOLD {
             log_error!(
-                self.write_stream_data(connection, direction, 128 << 10),
+                self.write_stream_data(connection, direction, Some(BUFFER_TOTAL_THRESHOLD_ADVANCE)),
                 "failed to write stream data"
             );
         }
@@ -535,12 +568,12 @@ impl ConnectionHandler for DirectoryOutputHandler {
             return;
         }
         log_error!(
-            self.write_remaining(connection, Direction::Forward),
-            "failed to write stream data"
+            self.write_stream_data(connection, Direction::Forward, None),
+            "failed to write final forward stream data"
         );
         log_error!(
-            self.write_remaining(connection, Direction::Reverse),
-            "failed to write stream data"
+            self.write_stream_data(connection, Direction::Reverse, None),
+            "failed to write final reverse stream data"
         );
     }
 }

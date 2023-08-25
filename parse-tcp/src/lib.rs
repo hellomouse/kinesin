@@ -106,7 +106,7 @@ where
     /// called on FIN
     fn fin_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
     /// called on RST
-    fn rst_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
+    fn rst_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction, _extra: PacketExtra) {}
     /// ACK for FIN received for stream
     fn stream_end(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
     /// connection fatally desynchronized, `direction` is our best guess for the

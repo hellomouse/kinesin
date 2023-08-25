@@ -8,15 +8,19 @@ use tracing::{debug, trace, warn};
 use crate::PacketExtra;
 
 /// size of the sequence number sliding window
-const SEQ_WINDOW_SIZE: u32 = 1024 << 20; // MB
+pub const SEQ_WINDOW_SIZE: u32 = 1024 << 20; // MB
 /// threshold for advancing the sequence number window
-const SEQ_WINDOW_ADVANCE_THRESHOLD: u32 = 512 << 20;
+pub const SEQ_WINDOW_ADVANCE_THRESHOLD: u32 = 512 << 20;
 /// how much to advance the sequence number window by
-const SEQ_WINDOW_ADVANCE_BY: u32 = 256 << 20;
+pub const SEQ_WINDOW_ADVANCE_BY: u32 = 256 << 20;
 /// max allowed size of stream buffer
-const MAX_ALLOWED_BUFFER_SIZE: u64 = 128 << 20;
+pub const MAX_ALLOWED_BUFFER_SIZE: u64 = 128 << 20;
 /// max size of segments_info in eleemnts
-const MAX_SEGMENTS_INFO_COUNT: usize = 128 << 10;
+pub const MAX_SEGMENTS_INFO_COUNT: usize = 128 << 10;
+/// how far forward to allow reset packets
+pub const RESET_MAX_LOOKAHEAD: u32 = 16 << 20;
+/// how far back to allow reset packets
+pub const RESET_MAX_LOOKBEHIND: u32 = 256 << 10;
 
 // TODO: track segments so we can have metadata in a heap or something
 /// unidirectional stream of a connection
@@ -161,14 +165,14 @@ impl Stream {
 
     /// update seq_window and seq_offset based on current window, return whether
     /// the value was in the current window and the absolute stream offset
-    pub fn update_offset(&mut self, number: u32) -> Option<u64> {
+    pub fn update_offset(&mut self, number: u32, should_advance: bool) -> Option<u64> {
         // ensure in range
         if self.seq_window_start < self.seq_window_end {
             // does not wrap
             if !(number >= self.seq_window_start && number < self.seq_window_end) {
                 None
             } else {
-                if number - self.seq_window_start > SEQ_WINDOW_ADVANCE_THRESHOLD {
+                if should_advance && number - self.seq_window_start > SEQ_WINDOW_ADVANCE_THRESHOLD {
                     // advance window
                     let old_start = self.seq_window_start;
                     self.seq_window_start = number - SEQ_WINDOW_ADVANCE_BY;
@@ -187,7 +191,7 @@ impl Stream {
             None
         } else if number >= self.seq_window_start {
             // at high section of window
-            if number - self.seq_window_start > SEQ_WINDOW_ADVANCE_THRESHOLD {
+            if should_advance && number - self.seq_window_start > SEQ_WINDOW_ADVANCE_THRESHOLD {
                 // advance window
                 let old_start = self.seq_window_start;
                 self.seq_window_start = number - SEQ_WINDOW_ADVANCE_BY;
@@ -208,7 +212,7 @@ impl Stream {
                 SeqOffset::Initial(isn) => SeqOffset::Subsequent((1 << 32) - isn as u64),
                 SeqOffset::Subsequent(off) => SeqOffset::Subsequent(off + (1 << 32)),
             };
-            if bytes_from_start > SEQ_WINDOW_ADVANCE_THRESHOLD {
+            if should_advance && bytes_from_start > SEQ_WINDOW_ADVANCE_THRESHOLD {
                 // advance window
                 let old_start = self.seq_window_start;
                 self.seq_window_start = number.wrapping_sub(SEQ_WINDOW_ADVANCE_BY);
@@ -236,9 +240,9 @@ impl Stream {
         &mut self,
         sequence_number: u32,
         mut data: &[u8],
-        extra: PacketExtra,
+        extra: &PacketExtra,
     ) -> bool {
-        let Some(offset) = self.update_offset(sequence_number) else {
+        let Some(offset) = self.update_offset(sequence_number, true) else {
             warn!(
                 "received seq number {} outside of window ({} - {})",
                 sequence_number, self.seq_window_start, self.seq_window_end
@@ -318,7 +322,7 @@ impl Stream {
         self.add_segment_info(SegmentInfo {
             offset,
             reverse_acked: self.reverse_acked,
-            extra,
+            extra: extra.clone(),
             data: SegmentType::Data {
                 len: data.len(),
                 is_retransmit,
@@ -333,9 +337,9 @@ impl Stream {
         &mut self,
         acknowledgment_number: u32,
         window_size: u16,
-        extra: PacketExtra,
+        extra: &PacketExtra,
     ) -> bool {
-        let Some(offset) = self.update_offset(acknowledgment_number) else {
+        let Some(offset) = self.update_offset(acknowledgment_number, true) else {
             warn!(
                 "received ack number {} outside of window ({} - {})",
                 acknowledgment_number, self.seq_window_start, self.seq_window_end
@@ -393,7 +397,7 @@ impl Stream {
         self.add_segment_info(SegmentInfo {
             offset,
             reverse_acked: self.reverse_acked,
-            extra,
+            extra: extra.clone(),
             data: SegmentType::Ack {
                 window: real_window as usize,
             },
@@ -407,9 +411,9 @@ impl Stream {
         &mut self,
         sequence_number: u32,
         data_len: usize,
-        extra: PacketExtra,
+        extra: &PacketExtra,
     ) -> bool {
-        let Some(offset) = self.update_offset(sequence_number) else {
+        let Some(offset) = self.update_offset(sequence_number, true) else {
             warn!(
                 "received fin with seq number {} outside of window ({} - {})",
                 sequence_number, self.seq_window_start, self.seq_window_end
@@ -443,12 +447,47 @@ impl Stream {
         self.add_segment_info(SegmentInfo {
             offset,
             reverse_acked: self.reverse_acked,
-            extra,
+            extra: extra.clone(),
             data: SegmentType::Fin {
                 end_offset: fin_offset,
             },
         });
         true
+    }
+
+    /// handle reset packet in established state
+    pub fn handle_rst_packet(&mut self, sequence_number: u32, extra: &PacketExtra) -> bool {
+        // we send reset packets to the aligned stream (i.e. if the packet is sent in
+        // the forward direction, then it is sent to the forward stream).
+        // to validate, compare sequence number of reset to highest_acked.
+        // do not update seq_window, as some middleboxes will generate reset packets
+        // with incorrect sequence numbers.
+        let Some(offset) = self.update_offset(sequence_number, false) else {
+            warn!(
+                "received reset with seq number {} outside of window ({} - {})",
+                sequence_number, self.seq_window_start, self.seq_window_end
+            );
+            return false;
+        };
+
+        if offset >= self.highest_acked.saturating_sub(RESET_MAX_LOOKBEHIND as u64)
+            && offset < self.highest_acked.saturating_add(RESET_MAX_LOOKAHEAD as u64)
+        {
+            debug!("got reset at offset {offset}");
+            self.add_segment_info(SegmentInfo {
+                offset,
+                reverse_acked: self.reverse_acked,
+                extra: extra.clone(),
+                data: SegmentType::Rst,
+            });
+            true
+        } else {
+            warn!(
+                "got likely invalid reset packet at offset {} (highest acked {}, seq {})",
+                offset, self.highest_acked, sequence_number
+            );
+            false
+        }
     }
 
     /// add an info object to segments_info
@@ -462,14 +501,17 @@ impl Stream {
         }
     }
 
-    /// pop and read segment info until offset, adding to vec
-    pub fn read_segments_until(&mut self, end_offset: u64, in_segments: &mut Vec<SegmentInfo>) {
+    /// pop and read segment info until offset, adding to vec.
+    /// if `end_offset` is None, read everything
+    pub fn read_segments_until(&mut self, end_offset: Option<u64>, in_segments: &mut Vec<SegmentInfo>) {
         loop {
             let Some(info_peek) = self.segments_info.peek() else {
                 break;
             };
-            if info_peek.offset >= end_offset {
-                break;
+            if let Some(end_offset) = end_offset {
+                if info_peek.offset >= end_offset {
+                    break;
+                }
             }
 
             in_segments.push(self.segments_info.pop().unwrap());
@@ -506,7 +548,7 @@ impl Stream {
             warn!("requested read of range past end of buffer");
             return None;
         }
-        self.read_segments_until(end_offset, in_segments);
+        self.read_segments_until(Some(end_offset), in_segments);
         self.read_gaps(start_offset..end_offset, in_gaps);
         // assume gaps don't exist
         self.state.received.insert_range(start_offset..end_offset);
@@ -524,6 +566,21 @@ impl Stream {
 impl Default for Stream {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// determine if `(base - before) <= value <= (base + after)` in GF(2^32)
+pub fn in_range_wrapping(base: u32, before: u32, after: u32, value: u32) -> bool {
+    let (begin, begin_wrap) = base.overflowing_sub(before);
+    let (end, end_wrap) = base.overflowing_add(after);
+    if begin_wrap && end_wrap {
+        panic!("requested range too large");
+    }
+
+    if begin <= end {
+        begin <= value && value <= end
+    } else {
+        begin <= value || value <= end
     }
 }
 
@@ -546,6 +603,7 @@ pub enum SegmentType {
     Data { len: usize, is_retransmit: bool },
     Ack { window: usize },
     Fin { end_offset: u64 },
+    Rst,
 }
 
 impl Ord for SegmentInfo {

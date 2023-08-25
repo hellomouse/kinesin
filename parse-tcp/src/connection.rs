@@ -4,7 +4,7 @@ use tracing::{debug, info_span, trace, warn};
 use uuid::Uuid;
 
 use crate::flow_table::{Flow, FlowCompare};
-use crate::stream::Stream;
+use crate::stream::{in_range_wrapping, Stream, RESET_MAX_LOOKAHEAD};
 use crate::TcpMeta;
 use crate::{ConnectionHandler, PacketExtra};
 
@@ -137,7 +137,7 @@ impl<H: ConnectionHandler> Connection<H> {
         if meta.flags.syn {
             self.handle_syn(meta)
         } else if meta.flags.rst {
-            self.handle_rst(meta)
+            self.handle_rst(meta, extra)
         } else {
             // FIN packets handled here too, as they may carry data
             self.handle_data(meta, data, extra)
@@ -255,22 +255,77 @@ impl<H: ConnectionHandler> Connection<H> {
     }
 
     /// handle packet with RST flag
-    pub fn handle_rst(&mut self, meta: &TcpMeta) -> bool {
+    pub fn handle_rst(&mut self, meta: &TcpMeta, extra: &PacketExtra) -> bool {
         debug_assert!(meta.flags.rst);
-        match self.forward_flow.compare_tcp_meta(meta) {
-            FlowCompare::Forward => {
-                debug!("received reset in forward direction");
-                self.forward_stream.had_reset = true;
+        let dir = self
+            .forward_flow
+            .compare_tcp_meta(meta)
+            .to_direction()
+            .expect("got unrelated flow");
+        match self.conn_state {
+            ConnectionState::None => {
+                // nothing to validate
+                debug!("received reset in {dir} direction in state None");
             }
-            FlowCompare::Reverse => {
-                debug!("received reset in reverse direction");
-                self.reverse_stream.had_reset = true;
+            // note that rejecting potentially legitimate resets in the handshake states
+            // doesn't cause significant problems, as the connection will resync on the
+            // first data packet. similarly, accepting potentially invalid resets will
+            // simply cause the connection to be recreated on the next packet.
+            ConnectionState::SynSent { .. } => {
+                if dir == Direction::Forward {
+                    // reset in response to nothing?
+                    warn!("received likely invalid reset in state SynSent with same direction as SYN");
+                    return false;
+                }
+                // cannot really validate, assume valid
+                debug!("got reset ({dir}) in state SynSent, likely connection refused");
             }
-            _ => unreachable!("got unrelated flow"),
+            ConnectionState::SynReceived { seq_no, ack_no, .. } => {
+                let base = match dir {
+                    // reset should have seq after seq of SYN/ACK
+                    Direction::Forward => seq_no,
+                    // reset should have seq after ack of SYN/ACK
+                    Direction::Reverse => ack_no,
+                };
+
+                if in_range_wrapping(base, 0, RESET_MAX_LOOKAHEAD, meta.seq_number) {
+                    debug!("got reset ({dir}) in state SynReceived");
+                } else {
+                    warn!(
+                        "got likely invalid reset ({dir}) in state SynReceived (seq {}, base {})",
+                        meta.seq_number, base
+                    );
+                    return false;
+                }
+            }
+            ConnectionState::Established { .. } => {
+                // let the stream handle it
+                let sp = info_span!("stream", %dir);
+                let accepted = sp.in_scope(|| match dir {
+                    Direction::Forward => self.forward_stream.handle_rst_packet(meta.seq_number, extra),
+                    Direction::Reverse => self.reverse_stream.handle_rst_packet(meta.seq_number, extra)
+                });
+                if !accepted {
+                    return false;
+                }
+            }
+            ConnectionState::Closed | ConnectionState::Desync => {
+                // connection already dead
+                return false;
+            }
         }
 
+        match dir {
+            Direction::Forward => {
+                self.forward_stream.had_reset = true;
+            }
+            Direction::Reverse => {
+                self.reverse_stream.had_reset = true;
+            }
+        }
         self.conn_state = ConnectionState::Closed;
         self.observed_close = true;
+        self.call_handler(|conn, h| h.rst_received(conn, dir, extra.clone()));
         true
     }
 
@@ -385,7 +440,7 @@ impl<H: ConnectionHandler> Connection<H> {
             // write data to stream
             let sp = info_span!("stream", %dir);
             got_data = sp
-                .in_scope(|| data_stream.handle_data_packet(meta.seq_number, data, extra.clone()));
+                .in_scope(|| data_stream.handle_data_packet(meta.seq_number, data, extra));
             did_something |= got_data;
         }
         let mut got_ack = false;
@@ -395,7 +450,7 @@ impl<H: ConnectionHandler> Connection<H> {
             // send ack to the stream in the opposite direction
             let sp = info_span!("stream", dir = %dir.swap());
             got_ack |= sp.in_scope(|| {
-                ack_stream.handle_ack_packet(meta.ack_number, meta.window, extra.clone())
+                ack_stream.handle_ack_packet(meta.ack_number, meta.window, extra)
             });
             did_something |= got_ack;
             // set ack offset on stream to correlate directions
@@ -403,7 +458,7 @@ impl<H: ConnectionHandler> Connection<H> {
 
             if !was_ended && ack_stream.has_ended {
                 ack_stream_got_end = true;
-                trace!("handle_data: {:?} received ACK for FIN", dir.swap());
+                trace!("handle_data: {} received ACK for FIN", dir.swap());
             }
         }
         let data_stream_has_ended = data_stream.has_ended;
@@ -412,7 +467,7 @@ impl<H: ConnectionHandler> Connection<H> {
             // notify stream of fin
             let sp = info_span!("stream", %dir);
             got_fin = sp.in_scope(|| {
-                data_stream.handle_fin_packet(meta.seq_number, data.len(), extra.clone())
+                data_stream.handle_fin_packet(meta.seq_number, data.len(), extra)
             });
             did_something |= got_fin;
         }
@@ -519,7 +574,12 @@ mod test {
             let mut guard = FIN_RECEIVED.lock();
             *guard = Some(direction);
         }
-        fn rst_received(&mut self, _connection: &mut Connection<Self>, direction: Direction) {
+        fn rst_received(
+            &mut self,
+            _connection: &mut Connection<Self>,
+            direction: Direction,
+            _extra: PacketExtra,
+        ) {
             let mut guard = RST_RECEIVED.lock();
             *guard = Some(direction);
         }
