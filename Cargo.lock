@@ -545,7 +545,7 @@ dependencies = [
 [[package]]
 name = "pcap-parser"
 version = "0.14.1"
-source = "git+https://github.com/iczero/pcap-parser?branch=unexpected-eof#472b779702868c82233852a703af4235acaaaa5f"
+source = "git+https://github.com/iczero/pcap-parser?branch=unexpected-eof#fe49c0c318067dddc8687e6b19850e48e4dc9a27"
 dependencies = [
  "circular",
  "nom",

@@ -10,7 +10,7 @@ use parse_tcp::parser::{ParseLayer, TcpParser};
 use parse_tcp::{initialize_logging, PacketExtra, TcpMeta};
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::{LegacyPcapReader, Linktype, PcapBlockOwned, PcapError};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 const PCAP_READER_BUFFER_SIZE: usize = 4 << 20; // 4 MB
 
@@ -53,7 +53,7 @@ fn main() -> eyre::Result<()> {
 
 enum FileOrStdinReader {
     File(File),
-    Stdin
+    Stdin,
 }
 
 macro_rules! impl_read_method {
@@ -149,11 +149,9 @@ fn read_pcap_legacy(
 ) -> eyre::Result<()> {
     let mut pcap_reader = LegacyPcapReader::new(PCAP_READER_BUFFER_SIZE, reader)
         .wrap_err("failed to create LegacyPcapReader")?;
-    let mut did_refill: u32 = 0;
     loop {
         match pcap_reader.next() {
             Ok((offset, block)) => {
-                did_refill = 0;
                 handler(block)?;
                 pcap_reader.consume(offset);
             }
@@ -165,15 +163,13 @@ fn read_pcap_legacy(
                 error!("unexpected eof while reading pcap");
                 break;
             }
-            Err(PcapError::Incomplete) => {
-                if did_refill > 10000 {
-                    eyre::bail!("infinite loop in pcap_reader.refill()");
+            Err(PcapError::Incomplete(needed)) => {
+                trace!("refilling pcap reader buffer (needed {needed} bytes)");
+                if needed > PCAP_READER_BUFFER_SIZE / 2 {
+                    eyre::bail!("packet size exceeded limit! pcap-parser wanted {needed} more bytes");
                 }
-                debug!("refilling pcap reader buffer");
                 match pcap_reader.refill() {
-                    Ok(()) => {
-                        did_refill += 1;
-                    }
+                    Ok(()) => {}
                     // only valid result is ReadError
                     Err(PcapError::ReadError) => {
                         eyre::bail!("read error occured while reading pcap");
