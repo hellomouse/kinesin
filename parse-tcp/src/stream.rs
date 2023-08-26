@@ -119,18 +119,21 @@ impl Stream {
         debug_assert!(fit_end_offset > self.state.window_limit);
         let window_available = self.state.window_limit - self.highest_acked;
         trace!("available window: {window_available}");
-        if window_available < 512 {
+        if window_available < 8 {
             // not enough space to estimate
+            debug!("cannot estimate window scale (available window: {window_available})");
             return false;
         }
         let mut try_scale = self.window_scale;
         let unscaled = window_available >> self.window_scale;
         if unscaled == 0 {
+            debug!("cannot estimate window scale: unscaled window size is 0");
             return false;
         }
         let mut new_limit = self.highest_acked + (unscaled << try_scale);
         loop {
             if try_scale >= 14 {
+                debug!("cannot estimate window scale: scale is too large");
                 return false;
             }
             if new_limit < fit_end_offset {
@@ -267,7 +270,6 @@ impl Stream {
                     if self.estimate_window_scale(packet_end_offset) {
                         debug_assert!(self.state.window_limit >= packet_end_offset);
                     } else {
-                        trace!("cannot estimate window scale");
                         self.state.set_limit(packet_end_offset);
                     }
                 } else {
@@ -356,7 +358,7 @@ impl Stream {
             // check if final data packet was acked
             if self.highest_acked > final_seq {
                 self.has_ended = true;
-                trace!("handle_ack_packet: fin (offset {final_seq}) got ack (offset {offset})");
+                debug!("handle_ack_packet: fin (offset {final_seq}) got ack (offset {offset})");
             }
         }
 
@@ -425,7 +427,7 @@ impl Stream {
         match self.state.final_offset {
             None => {
                 self.state.set_final_offset(fin_offset);
-                trace!(
+                debug!(
                     "handle_fin_packet: seq: {}, len: {}, final offset: {}",
                     sequence_number,
                     data_len,
@@ -473,7 +475,7 @@ impl Stream {
         if offset >= self.highest_acked.saturating_sub(RESET_MAX_LOOKBEHIND as u64)
             && offset < self.highest_acked.saturating_add(RESET_MAX_LOOKAHEAD as u64)
         {
-            debug!("got reset at offset {offset}");
+            debug!("handle_rst_packet: got reset at offset {offset}");
             self.add_segment_info(SegmentInfo {
                 offset,
                 reverse_acked: self.reverse_acked,

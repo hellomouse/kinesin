@@ -54,25 +54,25 @@ pub struct DumpHandler {
 
 impl DumpHandler {
     pub fn dump_stream_segments(&self) {
-        info!("segments (length {})", self.segments.len());
+        debug!("segments (length {})", self.segments.len());
         for segment in &self.segments {
-            info!("  offset: {}", segment.offset);
-            info!("  reverse acked: {}", segment.reverse_acked);
+            debug!("  offset: {}", segment.offset);
+            debug!("  reverse acked: {}", segment.reverse_acked);
             match segment.data {
                 SegmentType::Data { len, is_retransmit } => {
-                    info!("  type: data");
-                    info!("    len {len}, retransmit {is_retransmit}");
+                    debug!("  type: data");
+                    debug!("    len {len}, retransmit {is_retransmit}");
                 }
                 SegmentType::Ack { window } => {
-                    info!("  type: ack");
-                    info!("    window: {window}");
+                    debug!("  type: ack");
+                    debug!("    window: {window}");
                 }
                 SegmentType::Fin { end_offset } => {
-                    info!("  type: fin");
-                    info!("    end offset: {end_offset}");
+                    debug!("  type: fin");
+                    debug!("    end offset: {end_offset}");
                 }
                 SegmentType::Rst => {
-                    info!("  type: rst");
+                    debug!("  type: rst");
                 }
             }
         }
@@ -118,13 +118,15 @@ impl DumpHandler {
                 }
             });
 
-            info!("gaps (length {})", self.gaps.len());
-            for gap in &self.gaps {
-                info!(" gap {} -> {}", gap.start, gap.end);
+            if !self.gaps.is_empty() {
+                debug!("gaps (length {})", self.gaps.len());
+                for gap in &self.gaps {
+                    debug!(" gap {} -> {}", gap.start, gap.end);
+                }
             }
             self.dump_stream_segments();
 
-            info!("data (length {})", self.buf.len());
+            debug!("data (length {})", self.buf.len());
             println!("\n====================\n{} ({})", flow, uuid);
             println!("  offset: {start_offset}");
             println!("  length: {dump_len}\n");
@@ -135,7 +137,7 @@ impl DumpHandler {
             dump_as_readable_ascii(&self.buf, true);
         } else {
             // read segments only
-            info!("no new data, dumping segments only");
+            debug!("no new data, dumping segments only");
             self.dump_stream_segments();
         }
     }
@@ -152,7 +154,8 @@ impl DumpHandler {
 impl ConnectionHandler for DumpHandler {
     type InitialData = ();
     type ConstructError = Infallible;
-    fn new(_init: (), _conn: &mut Connection<Self>) -> Result<Self, Infallible> {
+    fn new(_init: (), conn: &mut Connection<Self>) -> Result<Self, Infallible> {
+        info!("new connection: {} ({})", conn.uuid, conn.forward_flow);
         Ok(DumpHandler {
             gaps: Vec::new(),
             segments: Vec::new(),
@@ -199,10 +202,11 @@ impl ConnectionHandler for DumpHandler {
         direction: Direction,
         _extra: PacketExtra,
     ) {
-        info!("{direction} ({}) received reset", connection.uuid);
+        debug!("{direction} ({}) received reset", connection.uuid);
     }
 
     fn will_retire(&mut self, connection: &mut Connection<Self>) {
+        info!("removing connection: {} ({})", connection.forward_flow, connection.uuid);
         self.write_remaining(connection, Direction::Forward);
         self.write_remaining(connection, Direction::Reverse);
     }
@@ -502,6 +506,7 @@ impl ConnectionHandler for DirectoryOutputHandler {
         shared_info: Self::InitialData,
         connection: &mut Connection<Self>,
     ) -> eyre::Result<Self> {
+        debug!("connection created: {} ({})", connection.forward_flow, connection.uuid);
         Ok(DirectoryOutputHandler {
             shared_info,
             id: connection.uuid,
@@ -513,6 +518,7 @@ impl ConnectionHandler for DirectoryOutputHandler {
     }
 
     fn handshake_done(&mut self, connection: &mut Connection<Self>) {
+        info!("writing data for new connection: {} ({})", connection.forward_flow, connection.uuid);
         if !self.got_handshake_done {
             self.got_handshake_done = true;
         }
@@ -563,6 +569,7 @@ impl ConnectionHandler for DirectoryOutputHandler {
     }
 
     fn will_retire(&mut self, connection: &mut Connection<Self>) {
+        info!("removing connection: {} ({})", connection.forward_flow, connection.uuid);
         if !self.got_handshake_done {
             // nothing to write if no data
             return;

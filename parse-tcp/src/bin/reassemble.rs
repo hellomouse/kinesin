@@ -113,7 +113,7 @@ fn parse_packets(
     let mut packet_counter = 0u64;
     read_pcap_legacy(reader, |block| match block {
         PcapBlockOwned::LegacyHeader(hdr) => {
-            info!("pcap linktype: {:?}", hdr.network);
+            debug!("pcap linktype: {:?}", hdr.network);
             let layer = match hdr.network {
                 Linktype::ETHERNET => ParseLayer::Link,
                 Linktype::RAW => ParseLayer::IP,

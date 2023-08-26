@@ -161,7 +161,7 @@ impl<H: ConnectionHandler> Connection<H> {
                         window_size: meta.window,
                         syn_seen: false,
                     };
-                    trace!(
+                    debug!(
                         "handle_syn: got SYN/ACK (no SYN), None -> SynReceived (seq {}, ack {})",
                         meta.seq_number,
                         meta.ack_number
@@ -181,7 +181,7 @@ impl<H: ConnectionHandler> Connection<H> {
                     self.conn_state = ConnectionState::SynSent {
                         seq_no: meta.seq_number,
                     };
-                    trace!(
+                    debug!(
                         "handle_syn: got SYN, None -> SynSent (seq {})",
                         meta.seq_number
                     );
@@ -202,7 +202,7 @@ impl<H: ConnectionHandler> Connection<H> {
                     // SYN/ACK received
                     if self.forward_flow.compare_tcp_meta(meta) != FlowCompare::Reverse {
                         // wrong direction?
-                        trace!("handle_syn: dropped SYN/ACK in wrong direction (state SynSent)");
+                        debug!("handle_syn: dropped SYN/ACK in wrong direction (state SynSent)");
                         false
                     } else {
                         if meta.ack_number != seq_no + 1 {
@@ -218,7 +218,7 @@ impl<H: ConnectionHandler> Connection<H> {
                             window_size: meta.window,
                             syn_seen: true,
                         };
-                        trace!(
+                        debug!(
                             "handle_syn: received SYN/ACK, SynSent -> SynReceived (seq {}, ack {})",
                             meta.seq_number,
                             meta.ack_number
@@ -265,7 +265,7 @@ impl<H: ConnectionHandler> Connection<H> {
         match self.conn_state {
             ConnectionState::None => {
                 // nothing to validate
-                debug!("received reset in {dir} direction in state None");
+                debug!("handle_rst: received reset in {dir} direction in state None");
             }
             // note that rejecting potentially legitimate resets in the handshake states
             // doesn't cause significant problems, as the connection will resync on the
@@ -289,7 +289,7 @@ impl<H: ConnectionHandler> Connection<H> {
                 };
 
                 if in_range_wrapping(base, 0, RESET_MAX_LOOKAHEAD, meta.seq_number) {
-                    debug!("got reset ({dir}) in state SynReceived");
+                    debug!("handle_rst: got reset ({dir}) in state SynReceived");
                 } else {
                     warn!(
                         "got likely invalid reset ({dir}) in state SynReceived (seq {}, base {})",
@@ -331,7 +331,7 @@ impl<H: ConnectionHandler> Connection<H> {
 
     /// handle data packet received before SYN/ACK
     pub fn handle_data_hs1(&mut self, meta: &TcpMeta, data: &[u8], extra: &PacketExtra) -> bool {
-        trace!(
+        debug!(
             "handle_data_hs1: received data before handshake completion, {:?} -> Established",
             self.conn_state
         );
@@ -349,7 +349,7 @@ impl<H: ConnectionHandler> Connection<H> {
         self.forward_stream.set_isn(forward_isn, 0);
         self.reverse_stream.set_isn(reverse_isn, 0);
 
-        trace!("handle_data_hs1: assuming forward isn: {forward_isn}, reverse isn: {reverse_isn}");
+        debug!("handle_data_hs1: assuming forward isn: {forward_isn}, reverse isn: {reverse_isn}");
 
         self.call_handler(|conn, h| h.handshake_done(conn));
 
@@ -379,22 +379,22 @@ impl<H: ConnectionHandler> Connection<H> {
                     if syn_seen {
                         self.observed_handshake = true;
                         reverse_window = meta.window;
-                        trace!("handle_data_hs2: got complete handshake");
+                        debug!("handle_data_hs2: got complete handshake");
                     } else {
-                        trace!("handle_data_hs2: got SYN/ACK and ACK of handshake");
+                        debug!("handle_data_hs2: got SYN/ACK and ACK of handshake");
                     }
                 } else {
-                    trace!("handle_data_hs2: probably lost final packet of handshake")
+                    debug!("handle_data_hs2: probably lost final packet of handshake")
                 }
                 (meta.seq_number, meta.ack_number)
             }
             FlowCompare::Reverse => {
-                trace!("handle_data_hs2: received reverse direction packet instead of final handshake ACK");
+                debug!("handle_data_hs2: received reverse direction packet instead of final handshake ACK");
                 (meta.ack_number, meta.seq_number)
             }
             _ => unreachable!("got unrelated flow"),
         };
-        trace!(
+        debug!(
             "handle_data_hs2: received data packet, SynReceived -> Established \
             (forward_isn: {forward_isn}, reverse_isn: {reverse_isn})"
         );
