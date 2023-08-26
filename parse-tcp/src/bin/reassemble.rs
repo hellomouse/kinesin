@@ -30,7 +30,11 @@ fn main() -> eyre::Result<()> {
     initialize_logging();
     info!("Hello, world!");
     let args = Args::parse();
-    let file = File::open(args.input).wrap_err("cannot open file")?;
+    let input = if args.input == PathBuf::from("-") {
+        FileOrStdinReader::Stdin
+    } else {
+        FileOrStdinReader::File(File::open(args.input).wrap_err("cannot open file")?)
+    };
     if let Some(out_dir) = args.output_dir {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         unsafe {
@@ -40,17 +44,40 @@ fn main() -> eyre::Result<()> {
                 Err(e) => warn!("failed to raise file limit: {e:?}"),
             }
         }
-        write_to_dir(file, out_dir)?;
+        write_to_dir(input, out_dir)?;
     } else {
-        dump_to_stdout(file)?;
+        dump_to_stdout(input)?;
     }
     Ok(())
 }
 
-fn dump_to_stdout(file: File) -> eyre::Result<()> {
+enum FileOrStdinReader {
+    File(File),
+    Stdin
+}
+
+macro_rules! impl_read_method {
+    (fn $name:ident(&mut self $(, $arg_name:ident: $arg_ty:ty)?) -> $ret:ty) => {
+        fn $name(&mut self $(, $arg_name: $arg_ty)?) -> $ret {
+            match self {
+                Self::File(f) => ::std::fs::File::$name(f $(, $arg_name)?),
+                Self::Stdin => ::std::io::Stdin::$name(&mut ::std::io::stdin() $(, $arg_name)?)
+            }
+        }
+    };
+}
+
+impl Read for FileOrStdinReader {
+    impl_read_method!(fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize>);
+    impl_read_method!(fn read_vectored(&mut self, bufs: &mut [std::io::IoSliceMut<'_>]) -> std::io::Result<usize>);
+    impl_read_method!(fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize>);
+    impl_read_method!(fn read_to_string(&mut self, buf: &mut String) -> std::io::Result<usize>);
+}
+
+fn dump_to_stdout(input: FileOrStdinReader) -> eyre::Result<()> {
     let mut flowtable: FlowTable<DumpHandler> = FlowTable::new(());
 
-    parse_packets(file, |meta, data, extra| {
+    parse_packets(input, |meta, data, extra| {
         let _ = flowtable.handle_packet(&meta, data, &extra);
         Ok(())
     })?;
@@ -59,12 +86,12 @@ fn dump_to_stdout(file: File) -> eyre::Result<()> {
     Ok(())
 }
 
-fn write_to_dir(file: File, out_dir: PathBuf) -> eyre::Result<()> {
+fn write_to_dir(input: FileOrStdinReader, out_dir: PathBuf) -> eyre::Result<()> {
     let (shared_info, errors_rx) =
         DirectoryOutputSharedInfo::new(out_dir).wrap_err("writing connections information file")?;
     let mut flowtable: FlowTable<DirectoryOutputHandler> = FlowTable::new(shared_info.clone());
 
-    parse_packets(file, |meta, data: &[u8], extra| {
+    parse_packets(input, |meta, data: &[u8], extra| {
         flowtable.handle_packet(&meta, data, &extra)?;
         if let Ok(e) = errors_rx.try_recv() {
             return Err(e);
@@ -122,11 +149,11 @@ fn read_pcap_legacy(
 ) -> eyre::Result<()> {
     let mut pcap_reader = LegacyPcapReader::new(PCAP_READER_BUFFER_SIZE, reader)
         .wrap_err("failed to create LegacyPcapReader")?;
-    let mut did_refill = false;
+    let mut did_refill: u32 = 0;
     loop {
         match pcap_reader.next() {
             Ok((offset, block)) => {
-                did_refill = false;
+                did_refill = 0;
                 handler(block)?;
                 pcap_reader.consume(offset);
             }
@@ -139,12 +166,13 @@ fn read_pcap_legacy(
                 break;
             }
             Err(PcapError::Incomplete) => {
-                if did_refill {
+                if did_refill > 10000 {
                     eyre::bail!("infinite loop in pcap_reader.refill()");
                 }
+                debug!("refilling pcap reader buffer");
                 match pcap_reader.refill() {
                     Ok(()) => {
-                        did_refill = true;
+                        did_refill += 1;
                     }
                     // only valid result is ReadError
                     Err(PcapError::ReadError) => {
