@@ -146,6 +146,8 @@ pub struct FlowTable<H: ConnectionHandler> {
     /// retired connections (usually closed)
     // hahahahaha watch this explode
     pub retired: RingBuf<Connection<H>>,
+    /// whether retired connections should be saved
+    pub save_retired: bool,
     /// initial data for ConnectionHandler
     pub handler_init_data: H::InitialData,
 }
@@ -168,6 +170,7 @@ impl<H: ConnectionHandler> FlowTable<H> {
         Self {
             map: HashMap::new(),
             retired: RingBuf::new(),
+            save_retired: false,
             handler_init_data,
         }
     }
@@ -255,7 +258,9 @@ impl<H: ConnectionHandler> FlowTable<H> {
 
         debug!("remove flow: {} {flow}", conn.uuid);
         conn.will_retire();
-        self.retired.push_back(conn);
+        if self.save_retired {
+            self.retired.push_back(conn);
+        }
     }
 
     /// close flowtable and retire all flows
@@ -263,7 +268,9 @@ impl<H: ConnectionHandler> FlowTable<H> {
         debug!("flowtable closing");
         for (flow, mut conn) in self.map.drain() {
             debug!("remove flow: {} {flow}", conn.uuid);
-            conn.will_retire();
+            if self.save_retired {
+                conn.will_retire();
+            }
             self.retired.push_back(conn);
         }
     }
