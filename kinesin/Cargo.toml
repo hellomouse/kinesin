@@ -1,7 +1,8 @@
 [package]
 name = "kinesin"
-version = "0.1.0"
 description = "kinesin re-exports crate (WIP)"
+version = "0.1.1"
+repository = "https://github.com/hellomouse/kinesin"
 edition = "2021"
 authors = ["iczero <iczero@hellomouse.net>"]
 license = "MPL-2.0"
