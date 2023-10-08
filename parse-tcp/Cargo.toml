@@ -1,7 +1,10 @@
 [package]
 name = "parse-tcp"
+description = "tcp reassembler"
 version = "0.1.0"
 edition = "2021"
+authors = ["iczero <iczero@hellomouse.net>"]
+license = "MPL-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -19,7 +22,6 @@ parking_lot = "0.12.1"
 pcap-parser = { git = "https://github.com/iczero/pcap-parser", branch = "unexpected-eof" }
 serde = { version = "1.0.185", features = ["derive"] }
 serde_json = "1.0.105"
-tokio = { version = "1.27.0", features = ["tracing", "full"] }
 tracing = "0.1.37"
 tracing-error = "0.2.0"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }

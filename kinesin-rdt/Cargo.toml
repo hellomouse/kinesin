@@ -1,7 +1,10 @@
 [package]
 name = "kinesin-rdt"
+description = "kinesin reliable data transport (WIP)"
 version = "0.1.0"
 edition = "2021"
+authors = ["iczero <iczero@hellomouse.net>"]
+license = "MPL-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

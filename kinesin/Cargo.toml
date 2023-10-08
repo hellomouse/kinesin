@@ -1,6 +1,10 @@
 [package]
 name = "kinesin"
 version = "0.1.0"
+description = "kinesin re-exports crate (WIP)"
 edition = "2021"
+authors = ["iczero <iczero@hellomouse.net>"]
+license = "MPL-2.0"
 
 [dependencies]
+kinesin-rdt = { version = "0.1.0", path = "../kinesin-rdt" }

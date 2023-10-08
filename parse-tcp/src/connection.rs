@@ -163,8 +163,7 @@ impl<H: ConnectionHandler> Connection<H> {
                     };
                     debug!(
                         "handle_syn: got SYN/ACK (no SYN), None -> SynReceived (seq {}, ack {})",
-                        meta.seq_number,
-                        meta.ack_number
+                        meta.seq_number, meta.ack_number
                     );
                     if let Some(scale) = meta.option_window_scale {
                         trace!("got window scale (SYN/ACK): {}", scale);
@@ -220,8 +219,7 @@ impl<H: ConnectionHandler> Connection<H> {
                         };
                         debug!(
                             "handle_syn: received SYN/ACK, SynSent -> SynReceived (seq {}, ack {})",
-                            meta.seq_number,
-                            meta.ack_number
+                            meta.seq_number, meta.ack_number
                         );
                         if let Some(scale) = meta.option_window_scale {
                             trace!("got window scale (SYN/ACK): {}", scale);
@@ -274,7 +272,9 @@ impl<H: ConnectionHandler> Connection<H> {
             ConnectionState::SynSent { .. } => {
                 if dir == Direction::Forward {
                     // reset in response to nothing?
-                    warn!("received likely invalid reset in state SynSent with same direction as SYN");
+                    warn!(
+                        "received likely invalid reset in state SynSent with same direction as SYN"
+                    );
                     return false;
                 }
                 // cannot really validate, assume valid
@@ -302,8 +302,12 @@ impl<H: ConnectionHandler> Connection<H> {
                 // let the stream handle it
                 let sp = info_span!("stream", %dir);
                 let accepted = sp.in_scope(|| match dir {
-                    Direction::Forward => self.forward_stream.handle_rst_packet(meta.seq_number, extra),
-                    Direction::Reverse => self.reverse_stream.handle_rst_packet(meta.seq_number, extra)
+                    Direction::Forward => self
+                        .forward_stream
+                        .handle_rst_packet(meta.seq_number, extra),
+                    Direction::Reverse => self
+                        .reverse_stream
+                        .handle_rst_packet(meta.seq_number, extra),
                 });
                 if !accepted {
                     return false;
@@ -439,8 +443,7 @@ impl<H: ConnectionHandler> Connection<H> {
         if !data.is_empty() {
             // write data to stream
             let sp = info_span!("stream", %dir);
-            got_data = sp
-                .in_scope(|| data_stream.handle_data_packet(meta.seq_number, data, extra));
+            got_data = sp.in_scope(|| data_stream.handle_data_packet(meta.seq_number, data, extra));
             did_something |= got_data;
         }
         let mut got_ack = false;
@@ -449,9 +452,8 @@ impl<H: ConnectionHandler> Connection<H> {
             let was_ended = ack_stream.has_ended;
             // send ack to the stream in the opposite direction
             let sp = info_span!("stream", dir = %dir.swap());
-            got_ack |= sp.in_scope(|| {
-                ack_stream.handle_ack_packet(meta.ack_number, meta.window, extra)
-            });
+            got_ack |=
+                sp.in_scope(|| ack_stream.handle_ack_packet(meta.ack_number, meta.window, extra));
             did_something |= got_ack;
             // set ack offset on stream to correlate directions
             data_stream.reverse_acked = ack_stream.highest_acked;
@@ -466,9 +468,8 @@ impl<H: ConnectionHandler> Connection<H> {
         if meta.flags.fin {
             // notify stream of fin
             let sp = info_span!("stream", %dir);
-            got_fin = sp.in_scope(|| {
-                data_stream.handle_fin_packet(meta.seq_number, data.len(), extra)
-            });
+            got_fin =
+                sp.in_scope(|| data_stream.handle_fin_packet(meta.seq_number, data.len(), extra));
             did_something |= got_fin;
         }
 
