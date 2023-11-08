@@ -268,9 +268,7 @@ impl<H: ConnectionHandler> FlowTable<H> {
         debug!("flowtable closing");
         for (flow, mut conn) in self.map.drain() {
             debug!("remove flow: {} {flow}", conn.uuid);
-            if self.save_retired {
-                conn.will_retire();
-            }
+            conn.will_retire();
             self.retired.push_back(conn);
         }
     }
