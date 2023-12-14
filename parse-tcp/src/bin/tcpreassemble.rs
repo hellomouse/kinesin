@@ -7,7 +7,8 @@ use eyre::Context;
 use parse_tcp::flow_table::FlowTable;
 use parse_tcp::handler::{DirectoryOutputHandler, DirectoryOutputSharedInfo, DumpHandler};
 use parse_tcp::parser::{ParseLayer, TcpParser};
-use parse_tcp::{initialize_logging, PacketExtra, TcpMeta};
+use parse_tcp::serialized::PacketExtra;
+use parse_tcp::{initialize_logging, TcpMeta};
 use pcap_parser::traits::PcapReaderIterator;
 use pcap_parser::{LegacyPcapReader, Linktype, PcapBlockOwned, PcapError};
 use tracing::{debug, error, info, trace, warn};
@@ -166,7 +167,9 @@ fn read_pcap_legacy(
             Err(PcapError::Incomplete(needed)) => {
                 trace!("refilling pcap reader buffer (needed {needed} bytes)");
                 if needed > PCAP_READER_BUFFER_SIZE / 2 {
-                    eyre::bail!("packet size exceeded limit! pcap-parser wanted {needed} more bytes");
+                    eyre::bail!(
+                        "packet size exceeded limit! pcap-parser wanted {needed} more bytes"
+                    );
                 }
                 match pcap_reader.refill() {
                     Ok(()) => {}

@@ -9,10 +9,10 @@ use tracing::warn;
 
 use crate::connection::Connection;
 use crate::connection::ConnectionState;
-use crate::ConnectionHandler;
-use crate::PacketExtra;
-use crate::TcpMeta;
 use crate::connection::Direction;
+use crate::serialized::PacketExtra;
+use crate::ConnectionHandler;
+use crate::TcpMeta;
 
 #[derive(Debug, Clone)]
 pub struct Flow {
@@ -191,9 +191,9 @@ impl<H: ConnectionHandler> FlowTable<H> {
                 match self.handle_packet_direct(meta, data, extra) {
                     HandlePacketResult::Ok => Ok(true),
                     HandlePacketResult::Dropped => Ok(false),
-                    _ => unreachable!("result not possible")
+                    _ => unreachable!("result not possible"),
                 }
-            },
+            }
             HandlePacketResult::Desync => {
                 // remove flow, then recreate and try again
                 debug!("handle_packet: got desync, recreating flow");
@@ -203,7 +203,7 @@ impl<H: ConnectionHandler> FlowTable<H> {
                 match self.handle_packet_direct(meta, data, extra) {
                     HandlePacketResult::Ok => Ok(true),
                     HandlePacketResult::Dropped => Ok(false),
-                    _ => unreachable!("result not possible")
+                    _ => unreachable!("result not possible"),
                 }
             }
         }
@@ -269,7 +269,9 @@ impl<H: ConnectionHandler> FlowTable<H> {
         for (flow, mut conn) in self.map.drain() {
             debug!("remove flow: {} {flow}", conn.uuid);
             conn.will_retire();
-            self.retired.push_back(conn);
+            if self.save_retired {
+                self.retired.push_back(conn);
+            }
         }
     }
 }

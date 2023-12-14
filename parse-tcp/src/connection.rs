@@ -4,9 +4,10 @@ use tracing::{debug, info_span, trace, warn};
 use uuid::Uuid;
 
 use crate::flow_table::{Flow, FlowCompare};
+use crate::serialized::PacketExtra;
 use crate::stream::{in_range_wrapping, Stream, RESET_MAX_LOOKAHEAD};
+use crate::ConnectionHandler;
 use crate::TcpMeta;
-use crate::{ConnectionHandler, PacketExtra};
 
 /// TCP handshake state
 #[derive(Debug, PartialEq)]
@@ -527,7 +528,8 @@ impl<H: ConnectionHandler> Connection<H> {
 
 #[cfg(test)]
 mod test {
-    use crate::{initialize_logging, ConnectionHandler, PacketExtra, TcpFlags, TcpMeta};
+    use crate::serialized::PacketExtra;
+    use crate::{initialize_logging, ConnectionHandler, TcpFlags, TcpMeta};
     use parking_lot::Mutex;
     use std::convert::Infallible;
     use std::mem;

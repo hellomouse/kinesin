@@ -1,21 +1,20 @@
 use std::convert::Infallible;
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
-use std::net::IpAddr;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use eyre::Context;
 use parking_lot::Mutex;
-use serde::Serialize;
 use tracing::{debug, info, trace};
 use uuid::Uuid;
 
 use crate::connection::{Connection, Direction};
 use crate::flow_table::Flow;
+use crate::serialized::{PacketExtra, ConnInfo, SerializedSegment};
 use crate::stream::{SegmentInfo, SegmentType};
-use crate::{ConnectionHandler, PacketExtra};
+use crate::ConnectionHandler;
 
 /// threshold for buffered readable bytes before writing out
 const BUFFER_READABLE_THRESHOLD: usize = 64 << 10;
@@ -206,30 +205,12 @@ impl ConnectionHandler for DumpHandler {
     }
 
     fn will_retire(&mut self, connection: &mut Connection<Self>) {
-        info!("removing connection: {} ({})", connection.forward_flow, connection.uuid);
+        info!(
+            "removing connection: {} ({})",
+            connection.forward_flow, connection.uuid
+        );
         self.write_remaining(connection, Direction::Forward);
         self.write_remaining(connection, Direction::Reverse);
-    }
-}
-
-#[derive(Serialize)]
-pub struct ConnInfo {
-    pub id: Uuid,
-    pub src_addr: IpAddr,
-    pub src_port: u16,
-    pub dst_addr: IpAddr,
-    pub dst_port: u16,
-}
-
-impl ConnInfo {
-    pub fn new(uuid: Uuid, flow: &Flow) -> Self {
-        ConnInfo {
-            id: uuid,
-            src_addr: flow.src_addr,
-            src_port: flow.src_port,
-            dst_addr: flow.dst_addr,
-            dst_port: flow.dst_port,
-        }
     }
 }
 
@@ -299,80 +280,6 @@ impl DirectoryOutputSharedInfo {
                 self.errors.send(e).expect("could not forward error");
                 None
             }
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type")]
-pub enum SerializedSegment {
-    #[serde(rename = "data")]
-    Data {
-        offset: u64,
-        len: usize,
-        is_retransmit: bool,
-        reverse_acked: u64,
-        #[serde(flatten)]
-        extra: PacketExtra,
-    },
-    #[serde(rename = "ack")]
-    Ack {
-        offset: u64,
-        window: usize,
-        reverse_acked: u64,
-        #[serde(flatten)]
-        extra: PacketExtra,
-    },
-    #[serde(rename = "fin")]
-    Fin {
-        offset: u64,
-        reverse_acked: u64,
-        #[serde(flatten)]
-        extra: PacketExtra,
-    },
-    #[serde(rename = "rst")]
-    Rst {
-        offset: u64,
-        reverse_acked: u64,
-        #[serde(flatten)]
-        extra: PacketExtra,
-    },
-    #[serde(rename = "gap")]
-    Gap { offset: u64, len: u64 },
-}
-
-impl SerializedSegment {
-    pub fn new_gap(offset: u64, len: u64) -> Self {
-        Self::Gap { offset, len }
-    }
-}
-
-impl From<&SegmentInfo> for SerializedSegment {
-    fn from(info: &SegmentInfo) -> Self {
-        match info.data {
-            SegmentType::Data { len, is_retransmit } => Self::Data {
-                offset: info.offset,
-                len,
-                is_retransmit,
-                reverse_acked: info.reverse_acked,
-                extra: info.extra.clone(),
-            },
-            SegmentType::Ack { window } => Self::Ack {
-                offset: info.offset,
-                window,
-                reverse_acked: info.reverse_acked,
-                extra: info.extra.clone(),
-            },
-            SegmentType::Fin { end_offset } => Self::Fin {
-                offset: end_offset,
-                reverse_acked: info.reverse_acked,
-                extra: info.extra.clone(),
-            },
-            SegmentType::Rst => Self::Rst {
-                offset: info.offset,
-                reverse_acked: info.reverse_acked,
-                extra: info.extra.clone(),
-            },
         }
     }
 }
@@ -506,7 +413,10 @@ impl ConnectionHandler for DirectoryOutputHandler {
         shared_info: Self::InitialData,
         connection: &mut Connection<Self>,
     ) -> eyre::Result<Self> {
-        debug!("connection created: {} ({})", connection.forward_flow, connection.uuid);
+        debug!(
+            "connection created: {} ({})",
+            connection.forward_flow, connection.uuid
+        );
         Ok(DirectoryOutputHandler {
             shared_info,
             id: connection.uuid,
@@ -518,7 +428,10 @@ impl ConnectionHandler for DirectoryOutputHandler {
     }
 
     fn handshake_done(&mut self, connection: &mut Connection<Self>) {
-        info!("writing data for new connection: {} ({})", connection.forward_flow, connection.uuid);
+        info!(
+            "writing data for new connection: {} ({})",
+            connection.forward_flow, connection.uuid
+        );
         if !self.got_handshake_done {
             self.got_handshake_done = true;
         }
@@ -569,7 +482,10 @@ impl ConnectionHandler for DirectoryOutputHandler {
     }
 
     fn will_retire(&mut self, connection: &mut Connection<Self>) {
-        info!("removing connection: {} ({})", connection.forward_flow, connection.uuid);
+        info!(
+            "removing connection: {} ({})",
+            connection.forward_flow, connection.uuid
+        );
         if !self.got_handshake_done {
             // nothing to write if no data
             return;

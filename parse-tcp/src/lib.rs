@@ -2,12 +2,14 @@ use std::fmt::Debug;
 use std::net::IpAddr;
 
 use connection::{Connection, Direction};
-use serde::Serialize;
+use serialized::PacketExtra;
 
 pub mod connection;
+pub mod emit;
 pub mod flow_table;
 pub mod handler;
 pub mod parser;
+pub mod serialized;
 pub mod stream;
 
 /// TCP packet metadata
@@ -106,7 +108,13 @@ where
     /// called on FIN
     fn fin_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
     /// called on RST
-    fn rst_received(&mut self, _connection: &mut Connection<Self>, _direction: Direction, _extra: PacketExtra) {}
+    fn rst_received(
+        &mut self,
+        _connection: &mut Connection<Self>,
+        _direction: Direction,
+        _extra: PacketExtra,
+    ) {
+    }
     /// ACK for FIN received for stream
     fn stream_end(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
     /// connection fatally desynchronized, `direction` is our best guess for the
@@ -114,21 +122,6 @@ where
     fn connection_desync(&mut self, _connection: &mut Connection<Self>, _direction: Direction) {}
     /// called when the connection is removed from the hashtable
     fn will_retire(&mut self, _connection: &mut Connection<Self>) {}
-}
-
-/// extra information that may be associated with the packet
-#[derive(Clone, Serialize)]
-#[serde(untagged)]
-pub enum PacketExtra {
-    None,
-    LegacyPcap {
-        /// packet number
-        index: u64,
-        /// timestamp (seconds)
-        ts_sec: u32,
-        /// timestamp (microseconds)
-        ts_usec: u32,
-    },
 }
 
 pub fn setup_log_handlers() {
