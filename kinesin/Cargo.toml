@@ -8,4 +8,4 @@ authors = ["iczero <iczero@hellomouse.net>"]
 license = "MPL-2.0"
 
 [dependencies]
-kinesin-rdt = { version = "0.1.0", path = "../kinesin-rdt" }
+kinesin-rdt = { version = "0.1.1", path = "../kinesin-rdt" }
