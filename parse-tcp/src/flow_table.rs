@@ -14,8 +14,13 @@ use crate::serialized::PacketExtra;
 use crate::ConnectionHandler;
 use crate::TcpMeta;
 
+// https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
+pub const IPPROTO_TCP: u8 = 6;
+pub const IPPROTO_UDP: u8 = 17;
+
 #[derive(Debug, Clone)]
 pub struct Flow {
+    pub proto: u8,
     pub src_addr: IpAddr,
     pub src_port: u16,
     pub dst_addr: IpAddr,
@@ -36,7 +41,9 @@ impl Flow {
 
     /// compare to other
     pub fn compare(&self, other: &Self) -> FlowCompare {
-        if self.src_addr == other.src_addr
+        if self.proto != other.proto {
+            FlowCompare::None
+        } else if self.src_addr == other.src_addr
             && self.dst_addr == other.dst_addr
             && self.src_port == other.src_port
             && self.dst_port == other.dst_port
@@ -59,6 +66,7 @@ impl Flow {
 impl From<&TcpMeta> for Flow {
     fn from(value: &TcpMeta) -> Self {
         Flow {
+            proto: IPPROTO_TCP,
             src_addr: value.src_addr,
             src_port: value.src_port,
             dst_addr: value.dst_addr,
@@ -281,23 +289,26 @@ mod test {
     use std::collections::HashMap;
     use std::net::Ipv4Addr;
 
-    use super::Flow;
+    use super::{Flow, IPPROTO_TCP};
 
     #[test]
     fn hash_map() {
         let forward = Flow {
+            proto: IPPROTO_TCP,
             src_addr: Ipv4Addr::new(10, 3, 160, 24).into(),
             src_port: 35619,
             dst_addr: Ipv4Addr::new(1, 1, 1, 1).into(),
             dst_port: 53,
         };
         let reverse = Flow {
+            proto: IPPROTO_TCP,
             src_addr: forward.dst_addr,
             src_port: forward.dst_port,
             dst_addr: forward.src_addr,
             dst_port: forward.src_port,
         };
         let unrelated = Flow {
+            proto: IPPROTO_TCP,
             src_addr: Ipv4Addr::new(10, 3, 160, 24).into(),
             src_port: 35619,
             dst_addr: Ipv4Addr::new(8, 8, 8, 8).into(),

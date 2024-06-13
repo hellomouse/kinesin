@@ -189,6 +189,9 @@ fn read_pcap_legacy(
             Err(PcapError::ReadError) => {
                 eyre::bail!("read error occured while reading pcap");
             }
+            Err(PcapError::BufferTooSmall) => {
+                eyre::bail!("pcap read buffer too small");
+            }
         }
     }
     Ok(())

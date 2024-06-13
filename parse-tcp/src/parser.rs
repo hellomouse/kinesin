@@ -35,7 +35,7 @@ impl TcpParser {
             self.failed_parse += 1;
             return None;
         };
-        let Some(internet_slice) = parsed.ip else {
+        let Some(internet_slice) = parsed.net else {
             trace!("ignoring packet: no IP layer");
             self.ignored += 1;
             return None;
@@ -52,11 +52,19 @@ impl TcpParser {
         };
 
         let (src_addr, dst_addr): (IpAddr, IpAddr) = match internet_slice {
-            InternetSlice::Ipv4(v4, _ext) => {
-                (v4.source_addr().into(), v4.destination_addr().into())
+            InternetSlice::Ipv4(v4) => {
+                let header = v4.header();
+                (
+                    header.source_addr().into(),
+                    header.destination_addr().into(),
+                )
             }
-            InternetSlice::Ipv6(v6, _ext) => {
-                (v6.source_addr().into(), v6.destination_addr().into())
+            InternetSlice::Ipv6(v6) => {
+                let header = v6.header();
+                (
+                    header.source_addr().into(),
+                    header.destination_addr().into(),
+                )
             }
         };
 
@@ -93,7 +101,7 @@ impl TcpParser {
             option_timestamp,
         };
 
-        Some((meta, parsed.payload))
+        Some((meta, tcp_slice.payload()))
     }
 }
 
