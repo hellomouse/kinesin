@@ -129,6 +129,7 @@ impl Eq for Flow {}
 
 impl std::hash::Hash for Flow {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.proto.hash(state);
         // order independent hashing
         if self.src_addr <= self.dst_addr {
             self.src_addr.hash(state);
