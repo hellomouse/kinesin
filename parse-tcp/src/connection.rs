@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::fmt::Display;
+use std::sync::Arc;
 
 use tracing::{debug, info_span, trace, warn};
 use uuid::Uuid;
@@ -93,7 +95,7 @@ pub struct Connection<H: ConnectionHandler> {
     pub reverse_stream: Stream,
 
     /// event handler object
-    pub event_handler: Option<H>,
+    pub event_handler: Arc<RefCell<Option<H>>>,
 }
 
 /// result from Connection::handle_packet
@@ -116,10 +118,10 @@ impl<H: ConnectionHandler> Connection<H> {
             observed_close: false,
             forward_stream: Stream::new(),
             reverse_stream: Stream::new(),
-            event_handler: None,
+            event_handler: Arc::new(RefCell::new(None)),
         };
         let handler = H::new(handler_init_data, &mut conn)?;
-        conn.event_handler = Some(handler);
+        conn.event_handler.replace(Some(handler));
         Ok(conn)
     }
 
@@ -514,9 +516,10 @@ impl<H: ConnectionHandler> Connection<H> {
 
     /// call the event handler, if one exists
     pub fn call_handler(&mut self, do_thing: impl FnOnce(&mut Self, &mut H)) {
-        if let Some(mut handler) = self.event_handler.take() {
-            do_thing(self, &mut handler);
-            self.event_handler = Some(handler);
+        let handler_arc = self.event_handler.clone();
+        let mut handler_ref = handler_arc.borrow_mut();
+        if let Some(ref mut handler) = *handler_ref {
+            do_thing(self, handler);
         }
     }
 
