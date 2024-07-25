@@ -149,7 +149,10 @@ impl std::hash::Hash for Flow {
 }
 
 /// a table of TCP connections
-pub struct FlowTable<H: ConnectionHandler> {
+pub struct FlowTable<H: ConnectionHandler>
+where
+    H::InitialData: Clone,
+{
     /// map holding flows by tuple
     pub map: HashMap<Flow, Connection<H>>,
     /// retired connections (usually closed)
@@ -173,7 +176,10 @@ pub enum HandlePacketResult {
     Desync,
 }
 
-impl<H: ConnectionHandler> FlowTable<H> {
+impl<H: ConnectionHandler> FlowTable<H>
+where
+    H::InitialData: Clone,
+{
     /// create new instance
     pub fn new(handler_init_data: H::InitialData) -> Self {
         Self {

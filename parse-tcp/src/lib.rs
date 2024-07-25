@@ -91,7 +91,7 @@ where
     Self: Sized,
 {
     /// initial data provided to new
-    type InitialData: Clone;
+    type InitialData;
     /// error type raised from new
     type ConstructError;
     /// construct handler object
