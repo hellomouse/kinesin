@@ -231,6 +231,10 @@ impl<T> RingBuf<T> {
     /// reserve space for at least `count` more elements
     #[allow(clippy::uninit_vec)] // does not allow access to uninitialized regions
     pub fn reserve(&mut self, count: usize) {
+        // stupid optimization: reset head to 0 if empty
+        if self.len == 0 {
+            self.realign();
+        }
         let desired_capacity = self.len.checked_add(count).expect("capacity overflow");
         if desired_capacity > self.capacity() {
             let old_capacity = self.capacity();
@@ -244,6 +248,9 @@ impl<T> RingBuf<T> {
 
     /// reserve space for exactly `count` more elements (see Vec::reserve_exact)
     pub fn reserve_exact(&mut self, count: usize) {
+        if self.len == 0 {
+            self.realign();
+        }
         let desired_capacity = self.len.checked_add(count).expect("capacity overflow");
         if desired_capacity > self.capacity() {
             let old_capacity = self.capacity();
@@ -492,6 +499,12 @@ impl<T> RingBuf<T> {
             // drain everything
             Drain::from_start(self, self.len)
         }
+    }
+}
+
+impl<T> Default for RingBuf<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

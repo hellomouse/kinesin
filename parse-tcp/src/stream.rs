@@ -331,7 +331,7 @@ impl Stream {
             },
         });
 
-        true
+        !is_retransmit
     }
 
     /// handle ack packet in the reverse direction
@@ -429,9 +429,7 @@ impl Stream {
                 self.state.set_final_offset(fin_offset);
                 debug!(
                     "handle_fin_packet: seq: {}, len: {}, final offset: {}",
-                    sequence_number,
-                    data_len,
-                    fin_offset
+                    sequence_number, data_len, fin_offset
                 );
             }
             Some(prev_fin) => {
@@ -472,8 +470,14 @@ impl Stream {
             return false;
         };
 
-        if offset >= self.highest_acked.saturating_sub(RESET_MAX_LOOKBEHIND as u64)
-            && offset < self.highest_acked.saturating_add(RESET_MAX_LOOKAHEAD as u64)
+        if offset
+            >= self
+                .highest_acked
+                .saturating_sub(RESET_MAX_LOOKBEHIND as u64)
+            && offset
+                < self
+                    .highest_acked
+                    .saturating_add(RESET_MAX_LOOKAHEAD as u64)
         {
             debug!("handle_rst_packet: got reset at offset {offset}");
             self.add_segment_info(SegmentInfo {
@@ -505,7 +509,11 @@ impl Stream {
 
     /// pop and read segment info until offset, adding to vec.
     /// if `end_offset` is None, read everything
-    pub fn read_segments_until(&mut self, end_offset: Option<u64>, in_segments: &mut Vec<SegmentInfo>) {
+    pub fn read_segments_until(
+        &mut self,
+        end_offset: Option<u64>,
+        in_segments: &mut Vec<SegmentInfo>,
+    ) {
         loop {
             let Some(info_peek) = self.segments_info.peek() else {
                 break;
