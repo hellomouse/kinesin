@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::connection::{Connection, Direction};
 use crate::flow_table::Flow;
-use crate::serialized::{PacketExtra, ConnInfo, SerializedSegment};
+use crate::serialized::{ConnInfo, PacketExtra, SerializedSegment};
 use crate::stream::{SegmentInfo, SegmentType};
 use crate::ConnectionHandler;
 
@@ -100,7 +100,7 @@ impl DumpHandler {
         } else {
             // explicitly dump all remaining segments
             trace!("dumping remaining segments for direction {direction}");
-            stream.read_segments_until(None, &mut self.segments);
+            stream.pop_segments_until(None, &mut self.segments);
             // dump everything remaining
             stream.total_buffered_length()
         };
@@ -109,13 +109,17 @@ impl DumpHandler {
         let end_offset = start_offset + dump_len as u64;
         if dump_len > 0 {
             trace!("requesting {dump_len} bytes for direction {direction}");
-            stream.read_next(end_offset, &mut self.segments, &mut self.gaps, |slice| {
-                let (a, b) = slice.as_slices();
-                self.buf.extend_from_slice(a);
-                if let Some(b) = b {
-                    self.buf.extend_from_slice(b);
-                }
-            });
+            stream.pop_segments_until(Some(end_offset), &mut self.segments);
+            stream.read_gaps_until(end_offset, &mut self.gaps);
+            let slice = stream
+                .read_buffer_until(end_offset)
+                .expect("stream cannot fulfill range");
+            let (a, b) = slice.as_slices();
+            self.buf.extend_from_slice(a);
+            if let Some(b) = b {
+                self.buf.extend_from_slice(b);
+            }
+            stream.consume_until(end_offset);
 
             if !self.gaps.is_empty() {
                 debug!("gaps (length {})", self.gaps.len());
@@ -331,7 +335,7 @@ impl DirectoryOutputHandler {
             dump_len
         } else {
             // explicitly dump all remaining segments
-            stream.read_segments_until(None, &mut self.segments);
+            stream.pop_segments_until(None, &mut self.segments);
             // dump everything remaining
             stream.total_buffered_length()
         };
@@ -339,18 +343,19 @@ impl DirectoryOutputHandler {
             trace!("write_stream_data: requesting {dump_len} bytes from stream for {direction}");
             let start_offset = stream.buffer_start();
             let end_offset = start_offset + dump_len as u64;
-            stream
-                .read_next(end_offset, &mut self.segments, &mut self.gaps, |slice| {
-                    let (a, b) = slice.as_slices();
-                    trace!("write_stream_data: writing {} data bytes", a.len());
-                    data_file.write_all(a)?;
-                    if let Some(b) = b {
-                        trace!("write_stream_data: writing {} data bytes", b.len());
-                        data_file.write_all(b)?;
-                    }
-                    Result::<(), std::io::Error>::Ok(())
-                })
-                .expect("read_next cannot fulfill range")?;
+            stream.pop_segments_until(Some(end_offset), &mut self.segments);
+            stream.read_gaps_until(end_offset, &mut self.gaps);
+            let slice = stream
+                .read_buffer_until(end_offset)
+                .expect("stream cannot fulfill range");
+            let (a, b) = slice.as_slices();
+            trace!("write_stream_data: writing {} data bytes", a.len());
+            data_file.write_all(a)?;
+            if let Some(b) = b {
+                trace!("write_stream_data: writing {} data bytes", b.len());
+                data_file.write_all(b)?;
+            }
+            stream.consume_until(end_offset);
         }
 
         // write gaps and segments in order

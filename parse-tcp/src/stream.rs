@@ -509,7 +509,7 @@ impl Stream {
 
     /// pop and read segment info until offset, adding to vec.
     /// if `end_offset` is None, read everything
-    pub fn read_segments_until(
+    pub fn pop_segments_until(
         &mut self,
         end_offset: Option<u64>,
         in_segments: &mut Vec<SegmentInfo>,
@@ -529,7 +529,8 @@ impl Stream {
     }
 
     /// read gaps in buffer in a given range, adding to vec and accounting in gaps_length
-    pub fn read_gaps(&mut self, range: Range<u64>, in_gaps: &mut Vec<Range<u64>>) {
+    pub fn read_gaps_until(&mut self, end_offset: u64, in_gaps: &mut Vec<Range<u64>>) {
+        let range = self.state.buffer_offset..end_offset;
         for gap in self.state.received.range_complement(range) {
             trace!("read_gaps: gap: {} .. {}", gap.start, gap.end);
             in_gaps.push(gap.clone());
@@ -538,13 +539,7 @@ impl Stream {
     }
 
     /// read state until offset
-    pub fn read_next<T>(
-        &mut self,
-        end_offset: u64,
-        in_segments: &mut Vec<SegmentInfo>,
-        in_gaps: &mut Vec<Range<u64>>,
-        read_fn: impl FnOnce(RingBufSlice<'_, u8>) -> T,
-    ) -> Option<T> {
+    pub fn read_buffer_until(&mut self, end_offset: u64) -> Option<RingBufSlice<'_, u8>> {
         let start_offset = self.state.buffer_offset;
         if end_offset < start_offset {
             warn!("requested read of range that no longer exists");
@@ -558,18 +553,19 @@ impl Stream {
             warn!("requested read of range past end of buffer");
             return None;
         }
-        self.read_segments_until(Some(end_offset), in_segments);
-        self.read_gaps(start_offset..end_offset, in_gaps);
         // assume gaps don't exist
         self.state.received.insert_range(start_offset..end_offset);
         // acquire slice
-        let Some(slice) = self.state.read_segment(start_offset..end_offset) else {
-            panic!("InboundStreamState says range is not available");
-        };
-        let ret = read_fn(slice);
+        Some(
+            self.state
+                .read_segment(start_offset..end_offset)
+                .expect("InboundStreamState says range is not available"),
+        )
+    }
+
+    pub fn consume_until(&mut self, end_offset: u64) {
         // advance backing buffer
         self.state.advance_buffer(end_offset);
-        Some(ret)
     }
 }
 
