@@ -538,7 +538,7 @@ impl Stream {
         }
     }
 
-    /// read state until offset
+    /// read bytes from buffer until offset
     pub fn read_buffer_until(&mut self, end_offset: u64) -> Option<RingBufSlice<'_, u8>> {
         let start_offset = self.state.buffer_offset;
         if end_offset < start_offset {

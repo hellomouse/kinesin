@@ -89,6 +89,11 @@ impl Display for Flow {
                 }
             };
         }
+        match self.proto {
+            IPPROTO_TCP => write!(f, "tcp/")?,
+            IPPROTO_UDP => write!(f, "udp/")?,
+            proto => write!(f, "{proto}/")?,
+        }
         fmt_addr!(self.src_addr);
         write!(f, ":{} -> ", self.src_port)?;
         fmt_addr!(self.dst_addr);
