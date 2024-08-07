@@ -198,10 +198,14 @@ impl<T> RingBuf<T> {
         }
     }
 
-    /// realign all elements so they are contiguous at the beginning of the buffer
+    /// realign elements so they are contiguous at the beginning of the buffer
     pub fn realign(&mut self) {
         if self.head == 0 {
             // already aligned, nothing to do
+            return;
+        } else if self.is_empty() {
+            // just reset the head
+            self.head = 0;
             return;
         }
 
@@ -210,16 +214,16 @@ impl<T> RingBuf<T> {
                 // copy to start
                 self.copy(self.head, 0, self.len);
             } else {
-                // copy head end to start
-                // from: [===>-----<=====]
-                // to:   [===><=====-----]
                 let head_segment_len = self.capacity() - self.head;
                 let tail_segment_len = self.len - head_segment_len;
+                // copy head end to start
+                // from: [===>---<=======]
+                // to:   [===><=======---]
                 self.copy(self.head, tail_segment_len, head_segment_len);
 
                 // rotate segment
-                // from: [===><=====-----]
-                // to:   [<========>-----]
+                // from: [===><=======---]
+                // to:   [<==========>---]
                 let slice = self.buf_slice_at_mut(0..self.len);
                 slice.rotate_left(tail_segment_len);
             }
@@ -850,9 +854,13 @@ impl<'a, T: Copy> RingBufSliceMut<'a, T> {
 impl<T> Drop for RingBuf<T> {
     fn drop(&mut self) {
         unsafe {
-            // ensure Vec does not drop garbage
-            self.realign();
-            self.buf.set_len(self.len);
+            if !self.is_empty() {
+                let drain = self.drain(0..);
+                drop(drain);
+            }
+            debug_assert!(self.is_empty());
+            // ensure vec does not drop again
+            self.buf.set_len(0);
         }
     }
 }

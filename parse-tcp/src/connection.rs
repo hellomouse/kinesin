@@ -440,15 +440,9 @@ impl<H: ConnectionHandler> Connection<H> {
         };
 
         let mut did_something = false;
-        let mut got_data = false;
-        if !data.is_empty() {
-            // write data to stream
-            let sp = info_span!("stream", %dir);
-            got_data = sp.in_scope(|| data_stream.handle_data_packet(meta.seq_number, data, extra));
-            did_something |= got_data;
-        }
         let mut got_ack = false;
         let mut ack_stream_got_end = false;
+        // handle ack first to update reverse_acked
         if meta.flags.ack {
             let was_ended = ack_stream.has_ended;
             // send ack to the stream in the opposite direction
@@ -463,6 +457,13 @@ impl<H: ConnectionHandler> Connection<H> {
                 ack_stream_got_end = true;
                 trace!("handle_data: {} received ACK for FIN", dir.swap());
             }
+        }
+        let mut got_data = false;
+        if !data.is_empty() {
+            // write data to stream
+            let sp = info_span!("stream", %dir);
+            got_data = sp.in_scope(|| data_stream.handle_data_packet(meta.seq_number, data, extra));
+            did_something |= got_data;
         }
         let data_stream_has_ended = data_stream.has_ended;
         let mut got_fin = false;
