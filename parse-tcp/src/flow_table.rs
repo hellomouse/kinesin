@@ -28,10 +28,21 @@ pub struct Flow {
 }
 
 impl Flow {
-    /// reverse source/destination
+    /// reverse source/destination in place
     pub fn reverse(&mut self) {
         mem::swap(&mut self.src_addr, &mut self.dst_addr);
         mem::swap(&mut self.src_port, &mut self.dst_port);
+    }
+
+    /// reverse source/destination, returning new instance
+    pub fn reversed(&self) -> Self {
+        Self {
+            proto: self.proto,
+            src_addr: self.dst_addr,
+            src_port: self.dst_port,
+            dst_addr: self.src_addr,
+            dst_port: self.src_port,
+        }
     }
 
     /// compare to TcpMeta
