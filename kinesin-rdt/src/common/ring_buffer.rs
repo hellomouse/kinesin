@@ -489,19 +489,22 @@ impl<T> RingBuf<T> {
             Bound::Unbounded => None,
         };
 
-        if let Some(start) = lower_bound {
-            if let Some(_end) = upper_bound {
-                unimplemented!("drain from middle unimplemented");
+        unsafe {
+            // safety: bounds checked above
+            if let Some(start) = lower_bound {
+                if let Some(_end) = upper_bound {
+                    unimplemented!("drain from middle unimplemented");
+                } else {
+                    // drain until end
+                    Drain::to_end_unchecked(self, start)
+                }
+            } else if let Some(end) = upper_bound {
+                // drain from start
+                Drain::from_start_unchecked(self, end)
             } else {
-                // drain until end
-                Drain::to_end(self, start)
+                // drain everything
+                Drain::from_start_unchecked(self, self.len)
             }
-        } else if let Some(end) = upper_bound {
-            // drain from start
-            Drain::from_start(self, end)
-        } else {
-            // drain everything
-            Drain::from_start(self, self.len)
         }
     }
 }
@@ -855,7 +858,7 @@ impl<T> Drop for RingBuf<T> {
     fn drop(&mut self) {
         unsafe {
             if !self.is_empty() {
-                let drain = self.drain(0..);
+                let drain = self.drain(..);
                 drop(drain);
             }
             debug_assert!(self.is_empty());
@@ -867,7 +870,7 @@ impl<T> Drop for RingBuf<T> {
 
 impl<'a, T> Drain<'a, T> {
     /// create a Drain for the range [0, until)
-    fn from_start(buf: &'a mut RingBuf<T>, until: usize) -> Drain<'a, T> {
+    unsafe fn from_start_unchecked(buf: &'a mut RingBuf<T>, until: usize) -> Drain<'a, T> {
         let prev_head = buf.head;
         let drain = Drain {
             buf,
@@ -876,13 +879,19 @@ impl<'a, T> Drain<'a, T> {
             remaining: until,
             prev_head,
         };
-        drain.buf.head = until;
-        drain.buf.len -= until;
+        if until < drain.buf.capacity() {
+            drain.buf.head = drain.buf.offset_of(until);
+            drain.buf.len -= until;
+        } else {
+            // offset_of cannot handle indexes >= capacity
+            drain.buf.head = 0;
+            drain.buf.len = 0;
+        }
         drain
     }
 
     /// create a Drain for the range [starting_from, buf.len)
-    fn to_end(buf: &'a mut RingBuf<T>, starting_from: usize) -> Drain<'a, T> {
+    unsafe fn to_end_unchecked(buf: &'a mut RingBuf<T>, starting_from: usize) -> Drain<'a, T> {
         let prev_head = buf.head;
         let back = buf.len;
         let remaining = buf.len - starting_from;
@@ -893,7 +902,7 @@ impl<'a, T> Drain<'a, T> {
             remaining,
             prev_head,
         };
-        drain.buf.len -= starting_from;
+        drain.buf.len = starting_from;
         drain
     }
 }
@@ -968,6 +977,8 @@ mod test {
     // should not in any way, shape, or form serve as reassurance that the
     // RingBuf implementation above is safe for anything at all
 
+    use std::panic::catch_unwind;
+
     use super::*;
 
     #[test]
@@ -1026,7 +1037,7 @@ mod test {
     }
 
     #[test]
-    fn drain() {
+    fn drain_from_start_1() {
         let mut buf: RingBuf<String> = RingBuf::new();
         buf.push_back("Hello, ".into());
         buf.push_back("world!".into());
@@ -1040,6 +1051,129 @@ mod test {
         let b: Vec<String> = buf.drain(..).collect();
         assert_eq!(b.join(""), "0123456789");
         assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn drain_from_start_2() {
+        let mut buf: RingBuf<String> = RingBuf::with_capacity(64);
+
+        for i in 'a'..='l' {
+            buf.push_back(i.to_string());
+        }
+
+        buf.push_back("Hello, ".into());
+        buf.push_back("world!".into());
+
+        for i in 0..10 {
+            buf.push_back(i.to_string());
+        }
+
+        let a: Vec<String> = buf.drain(..12).collect();
+        assert_eq!(a.join(""), "abcdefghijkl");
+        let c: Vec<String> = buf.drain(..2).collect();
+        assert_eq!(c.join(""), "Hello, world!");
+        let d: Vec<String> = buf.drain(..buf.len()).collect();
+        assert_eq!(d.join(""), "0123456789");
+        assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn drain_from_start_panic() {
+        catch_unwind(|| {
+            let mut buf: RingBuf<String> = RingBuf::with_capacity(64);
+
+            for i in 'a'..='l' {
+                buf.push_back(i.to_string());
+            }
+
+            buf.push_back("Hello, ".into());
+            buf.push_back("world!".into());
+
+            let a: Vec<String> = buf.drain(..12).collect();
+            assert_eq!(a.join(""), "abcdefghijkl");
+            panic!("aaa!");
+        })
+        .expect_err("panic expected");
+    }
+
+    #[test]
+    fn drain_to_end_1() {
+        let mut buf: RingBuf<String> = RingBuf::new();
+        buf.push_back("Hello, ".into());
+        buf.push_back("world!".into());
+
+        for i in 0..10 {
+            buf.push_back(i.to_string());
+        }
+
+        let b: Vec<String> = buf.drain(2..).collect();
+        assert_eq!(b.join(""), "0123456789");
+        let a: Vec<String> = buf.drain(..).collect();
+        assert_eq!(a.join(""), "Hello, world!");
+        assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn drain_to_end_2() {
+        let mut buf: RingBuf<String> = RingBuf::with_capacity(64);
+
+        for i in 'a'..='l' {
+            buf.push_back(i.to_string());
+        }
+
+        buf.push_back("Hello, ".into());
+        buf.push_back("world!".into());
+
+        for i in 0..10 {
+            buf.push_back(i.to_string());
+        }
+
+        let a: Vec<String> = buf.drain(..12).collect();
+        assert_eq!(a.join(""), "abcdefghijkl");
+        let d: Vec<String> = buf.drain(2..).collect();
+        assert_eq!(d.join(""), "0123456789");
+        let c: Vec<String> = buf.drain(..2).collect();
+        assert_eq!(c.join(""), "Hello, world!");
+        assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn drain_to_end_panic() {
+        catch_unwind(|| {
+            let mut buf: RingBuf<String> = RingBuf::with_capacity(64);
+
+            for i in 'a'..='l' {
+                buf.push_back(i.to_string());
+            }
+
+            buf.push_back("Hello, ".into());
+            buf.push_back("world!".into());
+
+            let a: Vec<String> = buf.drain(12..).collect();
+            assert_eq!(a.join(""), "Hello, world!");
+            panic!("aaa!");
+        })
+        .expect_err("panic expected");
+    }
+
+    #[test]
+    fn non_empty_drop() {
+        let mut buf: RingBuf<String> = RingBuf::with_capacity(16);
+        for i in 0..16 {
+            buf.push_back(i.to_string());
+        }
+        assert_eq!(buf.capacity(), 16);
+        drop(buf);
+        let mut buf: RingBuf<String> = RingBuf::with_capacity(16);
+        for i in 0..16 {
+            buf.push_back(i.to_string());
+        }
+        buf.drain(..8);
+        for i in 16..24 {
+            buf.push_back(i.to_string());
+        }
+        assert_eq!(buf.capacity(), 16);
+        drop(buf);
     }
 
     #[test]
