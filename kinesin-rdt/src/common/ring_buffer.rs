@@ -387,7 +387,7 @@ impl<T> RingBuf<T> {
     }
 
     /// get immutable reference to range
-    pub fn range(&self, range: Range<usize>) -> RingBufSlice<T> {
+    pub fn range(&self, range: Range<usize>) -> RingBufSlice<'_, T> {
         self.check_range(&range);
         RingBufSlice {
             buf: self,
@@ -397,7 +397,7 @@ impl<T> RingBuf<T> {
     }
 
     /// get mutable reference to range
-    pub fn range_mut(&mut self, range: Range<usize>) -> RingBufSliceMut<T> {
+    pub fn range_mut(&mut self, range: Range<usize>) -> RingBufSliceMut<'_, T> {
         self.check_range(&range);
         RingBufSliceMut {
             buf: self,
@@ -463,7 +463,7 @@ impl<T> RingBuf<T> {
     ///
     /// Currently only supports draining from either the start or the end.
     /// Drained elements are dropped when the iterator is dropped.
-    pub fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Drain<T> {
+    pub fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Drain<'_, T> {
         let lower_bound = match range.start_bound() {
             Bound::Included(&start) => {
                 assert!(start < self.len, "start index out of bounds");
