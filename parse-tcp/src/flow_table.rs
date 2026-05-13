@@ -18,7 +18,7 @@ use crate::TcpMeta;
 pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Flow {
     pub proto: u8,
     pub src_addr: IpAddr,
