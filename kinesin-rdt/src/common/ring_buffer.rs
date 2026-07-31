@@ -683,7 +683,7 @@ fn validate_subrange(r1: Range<usize>, r2: &Range<usize>) -> Range<usize> {
     assert!(r2.start <= r2.end, "range cannot be reverse");
     let new_start = r1.start.checked_add(r2.start).expect("start out of range");
     let new_end = r1.start.checked_add(r2.end).expect("end out of range");
-    assert!(new_start < r1.end, "start out of range");
+    assert!(new_start <= r1.end, "start out of range");
     assert!(new_end <= r1.end, "end out of range");
     new_start..new_end
 }
