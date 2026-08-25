@@ -507,35 +507,34 @@ impl Stream {
         }
     }
 
-    /// pop and read segment info until offset, adding to vec.
-    /// if `end_offset` is None, read everything
+    /// Pop and read segment info until offset as an iterator.
+    /// If `end_offset` is None, read everything
     pub fn pop_segments_until(
         &mut self,
         end_offset: Option<u64>,
-        in_segments: &mut Vec<SegmentInfo>,
-    ) {
-        loop {
-            let Some(info_peek) = self.segments_info.peek() else {
-                break;
-            };
+    ) -> impl Iterator<Item = SegmentInfo> + '_ {
+        std::iter::from_fn(move || {
+            let info_peek = self.segments_info.peek()?;
             if let Some(end_offset) = end_offset {
                 if info_peek.offset >= end_offset {
-                    break;
+                    return None;
                 }
             }
 
-            in_segments.push(self.segments_info.pop().unwrap());
-        }
+            Some(self.segments_info.pop().unwrap())
+        })
     }
 
-    /// read gaps in buffer in a given range, adding to vec and accounting in gaps_length
-    pub fn read_gaps_until(&mut self, end_offset: u64, in_gaps: &mut Vec<Range<u64>>) {
+    /// Read gaps in buffer in a given range as an iterator.
+    ///
+    /// Accounts for yielded gaps in `self.gaps_length`. `gaps_length` may remain
+    /// out of date if the iterator is not run to completion.
+    pub fn read_gaps_until(&mut self, end_offset: u64) -> impl Iterator<Item = Range<u64>> + '_ {
         let range = self.state.buffer_offset..end_offset;
-        for gap in self.state.received.range_complement(range) {
+        self.state.received.range_complement(range).inspect(|gap| {
             trace!("read_gaps: gap: {} .. {}", gap.start, gap.end);
-            in_gaps.push(gap.clone());
             self.gaps_length += gap.end - gap.start;
-        }
+        })
     }
 
     /// read bytes from buffer until offset

@@ -100,7 +100,7 @@ impl DumpHandler {
         } else {
             // explicitly dump all remaining segments
             trace!("dumping remaining segments for direction {direction}");
-            stream.pop_segments_until(None, &mut self.segments);
+            self.segments.extend(stream.pop_segments_until(None));
             // dump everything remaining
             stream.total_buffered_length()
         };
@@ -109,8 +109,9 @@ impl DumpHandler {
         let end_offset = start_offset + dump_len as u64;
         if dump_len > 0 {
             trace!("requesting {dump_len} bytes for direction {direction}");
-            stream.pop_segments_until(Some(end_offset), &mut self.segments);
-            stream.read_gaps_until(end_offset, &mut self.gaps);
+            self.segments
+                .extend(stream.pop_segments_until(Some(end_offset)));
+            self.gaps.extend(stream.read_gaps_until(end_offset));
             let slice = stream
                 .read_buffer_until(end_offset)
                 .expect("stream cannot fulfill range");
@@ -335,7 +336,7 @@ impl DirectoryOutputHandler {
             dump_len
         } else {
             // explicitly dump all remaining segments
-            stream.pop_segments_until(None, &mut self.segments);
+            self.segments.extend(stream.pop_segments_until(None));
             // dump everything remaining
             stream.total_buffered_length()
         };
@@ -343,8 +344,9 @@ impl DirectoryOutputHandler {
             trace!("write_stream_data: requesting {dump_len} bytes from stream for {direction}");
             let start_offset = stream.buffer_start();
             let end_offset = start_offset + dump_len as u64;
-            stream.pop_segments_until(Some(end_offset), &mut self.segments);
-            stream.read_gaps_until(end_offset, &mut self.gaps);
+            self.segments
+                .extend(stream.pop_segments_until(Some(end_offset)));
+            self.gaps.extend(stream.read_gaps_until(end_offset));
             let slice = stream
                 .read_buffer_until(end_offset)
                 .expect("stream cannot fulfill range");

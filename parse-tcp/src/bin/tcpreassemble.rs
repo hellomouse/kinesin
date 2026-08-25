@@ -31,7 +31,7 @@ fn main() -> eyre::Result<()> {
     initialize_logging();
     info!("Hello, world!");
     let args = Args::parse();
-    let input = if args.input == PathBuf::from("-") {
+    let input = if args.input == *"-" {
         FileOrStdinReader::Stdin
     } else {
         FileOrStdinReader::File(File::open(args.input).wrap_err("cannot open file")?)
