@@ -7,6 +7,9 @@ edition = "2021"
 authors = ["iczero <iczero@hellomouse.net>"]
 license = "MPL-2.0"
 
+[features]
+enable-tracing-spans = []
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

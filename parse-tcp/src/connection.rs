@@ -132,7 +132,7 @@ impl<H: ConnectionHandler> Connection<H> {
     }
 
     /// handle a packet supposedly belonging to this connection
-    #[tracing::instrument(name = "conn", skip_all, fields(id = %self.uuid))]
+    #[cfg_attr(feature = "enable-tracing-spans", tracing::instrument(name = "conn", skip_all, fields(id = %self.uuid)))]
     pub fn handle_packet(&mut self, meta: &TcpMeta, data: &[u8], extra: &PacketExtra) -> bool {
         debug_assert_ne!(self.forward_flow.compare_tcp_meta(meta), FlowCompare::None);
         if meta.flags.syn {
@@ -301,7 +301,11 @@ impl<H: ConnectionHandler> Connection<H> {
             }
             ConnectionState::Established { .. } => {
                 // let the stream handle it
-                let sp = info_span!("stream", %dir);
+                let sp = if cfg!(feature = "enable-tracing-spans") {
+                    info_span!("stream", %dir)
+                } else {
+                    tracing::Span::none()
+                };
                 let accepted = sp.in_scope(|| match dir {
                     Direction::Forward => self
                         .forward_stream
@@ -446,7 +450,11 @@ impl<H: ConnectionHandler> Connection<H> {
         if meta.flags.ack {
             let was_ended = ack_stream.has_ended;
             // send ack to the stream in the opposite direction
-            let sp = info_span!("stream", dir = %dir.swap());
+            let sp = if cfg!(feature = "enable-tracing-spans") {
+                info_span!("stream", %dir)
+            } else {
+                tracing::Span::none()
+            };
             got_ack |=
                 sp.in_scope(|| ack_stream.handle_ack_packet(meta.ack_number, meta.window, extra));
             did_something |= got_ack;
@@ -461,7 +469,11 @@ impl<H: ConnectionHandler> Connection<H> {
         let mut got_data = false;
         if !data.is_empty() {
             // write data to stream
-            let sp = info_span!("stream", %dir);
+            let sp = if cfg!(feature = "enable-tracing-spans") {
+                info_span!("stream", %dir)
+            } else {
+                tracing::Span::none()
+            };
             got_data = sp.in_scope(|| data_stream.handle_data_packet(meta.seq_number, data, extra));
             did_something |= got_data;
         }
@@ -469,7 +481,11 @@ impl<H: ConnectionHandler> Connection<H> {
         let mut got_fin = false;
         if meta.flags.fin {
             // notify stream of fin
-            let sp = info_span!("stream", %dir);
+            let sp = if cfg!(feature = "enable-tracing-spans") {
+                info_span!("stream", %dir)
+            } else {
+                tracing::Span::none()
+            };
             got_fin =
                 sp.in_scope(|| data_stream.handle_fin_packet(meta.seq_number, data.len(), extra));
             did_something |= got_fin;
