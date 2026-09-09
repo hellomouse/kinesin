@@ -143,7 +143,7 @@ impl<T> RingBuf<T> {
     /// get offset into backing buffer from element index and explicit head index
     fn offset_of_explicit(&self, head: usize, index: usize) -> usize {
         // disclaimer: the math worked. outside of that, i have no idea what this does
-        debug_assert!(index < self.capacity(), "index cannot exceed capacity");
+        debug_assert!(index <= self.capacity(), "index cannot exceed capacity");
         let remaining = self.capacity() - index;
         if head < remaining {
             // does not wrap
@@ -158,7 +158,7 @@ impl<T> RingBuf<T> {
     fn offset_of_reverse(&self, negative_index: usize) -> usize {
         // disclaimer: same as above
         debug_assert!(
-            negative_index < self.capacity(),
+            negative_index <= self.capacity(),
             "index cannot exceed capacity"
         );
         if self.head >= negative_index {
@@ -1192,6 +1192,17 @@ mod test {
 
         let range2 = buf.range(0..4);
         assert_eq!(range2.read_fixed::<4>(), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn push_front_empty() {
+        let mut data = [0u8; 64];
+        for (i, v) in data.iter_mut().enumerate() {
+            *v = i as u8;
+        }
+        let mut buf: RingBuf<u8> = RingBuf::new();
+        buf.push_front_copy_from_slice(&data);
+        assert_eq!(buf.get(12), Some(&12));
     }
 
     #[test]
