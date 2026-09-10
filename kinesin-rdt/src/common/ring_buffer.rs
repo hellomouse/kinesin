@@ -17,6 +17,7 @@ pub struct RingBuf<T> {
 }
 
 /// an immutable element range of a RingBuf
+#[derive(Clone)]
 pub struct RingBufSlice<'a, T> {
     buf: &'a RingBuf<T>,
     start: usize,
