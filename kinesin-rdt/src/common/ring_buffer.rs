@@ -742,6 +742,20 @@ impl<'a, T: Copy> RingBufSlice<'a, T> {
     }
 }
 
+impl<'a> bytes::Buf for RingBufSlice<'a, u8> {
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self.as_slices().0
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        *self = self.range(cnt..self.len());
+    }
+}
+
 impl<'a, T> RingBufSliceMut<'a, T> {
     /// get length of slice
     pub fn len(&self) -> usize {
@@ -1215,5 +1229,21 @@ mod test {
         assert_eq!(buf.get(16), Some(&6));
         assert_eq!(buf.get(48), Some(&5));
         assert_eq!(buf.get(95), Some(&5));
+    }
+
+    #[test]
+    fn bytes_buf_get() {
+        use bytes::Buf;
+
+        let mut buf: RingBuf<u8> = RingBuf::with_capacity(16);
+        buf.push_back_copy_from_slice(&[0u8; 12]);
+        let mut tmp = [0u8; 8];
+        buf.pop_front_copy_to_slice(&mut tmp);
+        buf.push_back_copy_from_slice(&[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(buf.capacity(), 16);
+        let mut range = buf.range(0..buf.len());
+        range.advance(4);
+        assert_eq!(range.len(), 8);
+        assert_eq!(range.get_u64(), 0x0001020304050607);
     }
 }
