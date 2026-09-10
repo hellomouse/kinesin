@@ -1242,6 +1242,7 @@ mod test {
         buf.push_back_copy_from_slice(&[0, 1, 2, 3, 4, 5, 6, 7]);
         assert_eq!(buf.capacity(), 16);
         let mut range = buf.range(0..buf.len());
+        assert!(range.as_slices().1.is_some());
         range.advance(4);
         assert_eq!(range.len(), 8);
         assert_eq!(range.get_u64(), 0x0001020304050607);

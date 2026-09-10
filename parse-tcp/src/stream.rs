@@ -562,6 +562,15 @@ impl Stream {
         )
     }
 
+    /// read all available bytes
+    pub fn read_available(&self) -> RingBufSlice<'_, u8> {
+        let start_offset = self.buffer_start();
+        let end_offset = start_offset + self.readable_buffered_length() as u64;
+        self.state
+            .read_segment(start_offset..end_offset)
+            .expect("segment marked readable is not available")
+    }
+
     pub fn consume_until(&mut self, end_offset: u64) {
         // advance backing buffer
         self.state.advance_buffer(end_offset);
