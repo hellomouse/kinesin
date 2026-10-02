@@ -686,3 +686,17 @@ impl SeqOffset {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::Stream;
+
+    #[test]
+    fn read_empty_stream() {
+        // reading with nothing buffered yields an empty slice rather than panicking
+        let stream = Stream::new();
+        assert_eq!(stream.readable_buffered_length(), 0);
+        assert!(stream.read_next(9).is_empty());
+        assert!(stream.read_available().is_empty());
+    }
+}

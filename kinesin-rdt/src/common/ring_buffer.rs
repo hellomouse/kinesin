@@ -355,7 +355,8 @@ impl<T> RingBuf<T> {
     /// ensure provided index range is sane
     fn check_range(&self, range: &Range<usize>) {
         assert!(range.start <= range.end, "range cannot be reverse");
-        assert!(range.start < self.len, "range start out of bounds");
+        // start == len is fine for an empty range, matching slice indexing (`&s[len..len]`)
+        assert!(range.start <= self.len, "range start out of bounds");
         assert!(range.end <= self.len, "range end out of bounds");
     }
 
@@ -1247,5 +1248,37 @@ mod test {
         range.advance(4);
         assert_eq!(range.len(), 8);
         assert_eq!(range.get_u64(), 0x0001020304050607);
+    }
+
+    #[test]
+    fn empty_range_at_end() {
+        // never allocated
+        let buf: RingBuf<u8> = RingBuf::new();
+        let range = buf.range(0..0);
+        assert!(range.is_empty());
+        assert_eq!(range.as_slices(), (&[][..], None));
+        let mut out = [0u8; 0];
+        range.copy_to_slice(&mut out);
+
+        // non-empty buffer, empty range at the end, including after wrapping
+        let mut buf: RingBuf<u8> = RingBuf::with_capacity(16);
+        buf.push_back_copy_from_slice(&[0u8; 12]);
+        buf.drain(..12);
+        buf.push_back_copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let len = buf.len();
+        let range = buf.range(len..len);
+        assert!(range.is_empty());
+        assert_eq!(range.as_slices().0.len(), 0);
+        assert!(buf.range(0..len).range(len..len).is_empty());
+        let mut buf = buf;
+        assert_eq!(buf.range_mut(len..len).len(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "range start out of bounds")]
+    fn range_start_past_end() {
+        let mut buf: RingBuf<u8> = RingBuf::new();
+        buf.push_back_copy_from_slice(&[1, 2, 3]);
+        let _ = buf.range(4..4);
     }
 }

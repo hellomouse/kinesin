@@ -184,7 +184,8 @@ impl StreamInboundState {
             .try_into()
             .expect("range out of bounds");
 
-        if !self.received.has_range(segment.clone()) {
+        // an empty range needs no data, so it is available even if nothing was received yet
+        if len > 0 && !self.received.has_range(segment.clone()) {
             // requested segment not complete
             return None;
         }
@@ -274,5 +275,30 @@ pub mod test {
         let hello2 = String::from_utf8(read).unwrap();
         assert_eq!(hello2, hello + &world);
         assert!(inbound.finished());
+    }
+
+    #[test]
+    fn read_empty_segment() {
+        // nothing received yet
+        let mut inbound = StreamInboundState::new(4096, true);
+        assert!(inbound.read_segment(0..0).unwrap().is_empty());
+        assert!(inbound.read_segment(0..1).is_none());
+
+        // empty range at the end of buffered data, and at the start of a gap
+        assert_eq!(
+            inbound.receive_segment(0, b"abc"),
+            ReceiveSegmentResult::Received
+        );
+        assert_eq!(
+            inbound.receive_segment(5, b"fg"),
+            ReceiveSegmentResult::Received
+        );
+        assert!(inbound.read_segment(3..3).unwrap().is_empty());
+        assert!(inbound.read_segment(3..4).is_none());
+
+        // already consumed
+        inbound.advance_buffer(2);
+        assert!(inbound.read_segment(1..1).is_none());
+        assert!(inbound.read_segment(2..2).unwrap().is_empty());
     }
 }
